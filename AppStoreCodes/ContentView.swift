@@ -37,6 +37,10 @@ struct ContentView: View {
     @State private var showingFetchSheet = false
     @StateObject private var api = AppStoreConnectAPI.shared
 
+    // Privacy mode
+    @State private var isPrivacyModeEnabled = false
+
+
     // CSV Import configuration
     @State private var pendingImportURL: URL?
     @State private var csvImportExpirationDate = Calendar.current.date(byAdding: .month, value: 6, to: Date()) ?? Date()
@@ -156,47 +160,28 @@ struct ContentView: View {
         List(selection: $selectedApp) {
             Section("Apps") {
                 ForEach(apps) { app in
-                    DisclosureGroup {
-                        // All codes option
-                        Button {
+                    AppSidebarRow(
+                        app: app,
+                        isSelected: selectedApp?.id == app.id && selectedBatch == nil,
+                        selectedBatchId: selectedBatch?.id,
+                        onSelectApp: {
                             selectedApp = app
                             selectedBatch = nil
-                        } label: {
-                            Label("All Codes (\(app.totalCodesCount))", systemImage: "tray.full")
+                        },
+                        onSelectBatch: { batch in
+                            selectedApp = app
+                            selectedBatch = batch
+                        },
+                        onEditBatch: { batch in
+                            editingBatch = batch
+                        },
+                        onExportBatch: { batch in
+                            exportBatch(batch)
+                        },
+                        onDeleteBatch: { batch in
+                            deleteBatch(batch)
                         }
-                        .buttonStyle(.plain)
-
-                        // Individual batches
-                        ForEach((app.batches ?? []).sorted { $0.importDate > $1.importDate }) { batch in
-                            Button {
-                                selectedApp = app
-                                selectedBatch = batch
-                            } label: {
-                                HStack {
-                                    Label(batch.name, systemImage: "folder")
-                                    Spacer()
-                                    Text("\(batch.totalCodesCount)")
-                                        .foregroundStyle(.secondary)
-                                        .font(.caption)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu {
-                                Button("Rename Batch...") {
-                                    editingBatch = batch
-                                }
-                                Button("Export Batch...") {
-                                    exportBatch(batch)
-                                }
-                                Divider()
-                                Button("Delete Batch", role: .destructive) {
-                                    deleteBatch(batch)
-                                }
-                            }
-                        }
-                    } label: {
-                        AppRowView(app: app)
-                    }
+                    )
                     .contextMenu {
                         AppContextMenu(
                             app: app,
@@ -273,6 +258,20 @@ struct ContentView: View {
                         .disabled(filteredCodes.filter { !$0.isRedeemed }.isEmpty)
                         .keyboardShortcut("g", modifiers: .command)
 
+                        // Privacy mode toggle
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isPrivacyModeEnabled.toggle()
+                            }
+                        } label: {
+                            Label(
+                                isPrivacyModeEnabled ? "Show Codes" : "Hide Codes",
+                                systemImage: isPrivacyModeEnabled ? "eye.slash.fill" : "eye"
+                            )
+                        }
+                        .help(isPrivacyModeEnabled ? "Show codes (Privacy mode)" : "Hide codes (Privacy mode)")
+                        .keyboardShortcut("h", modifiers: [.command, .shift])
+
                         Text("\(filteredCodes.count) codes")
                             .foregroundStyle(.secondary)
                             .frame(minWidth: 80, alignment: .trailing)
@@ -299,9 +298,8 @@ struct ContentView: View {
                         .width(50)
 
                         TableColumn("Code") { code in
-                            Text(code.code)
+                            Text(isPrivacyModeEnabled ? maskedCode(code.code) : code.code)
                                 .font(.system(.body, design: .monospaced))
-                                .textSelection(.enabled)
                                 .foregroundStyle(code.isExpired && !code.isRedeemed ? .secondary : .primary)
                         }
                         .width(min: 180, ideal: 200)
@@ -470,7 +468,7 @@ struct ContentView: View {
             if selectedCodes.count == 1,
                let codeId = selectedCodes.first,
                let code = filteredCodes.first(where: { $0.id == codeId }) {
-                CodeDetailView(code: code)
+                CodeDetailView(code: code, isPrivacyModeEnabled: isPrivacyModeEnabled)
             } else if selectedCodes.count > 1 {
                 ContentUnavailableView("\(selectedCodes.count) Codes Selected", systemImage: "square.stack", description: Text("Use the toolbar to perform bulk actions."))
             } else {
@@ -522,6 +520,17 @@ struct ContentView: View {
         guard let codeId = selectedCodes.first,
               let code = filteredCodes.first(where: { $0.id == codeId }) else { return }
         copyToClipboard(code.redemptionURL)
+    }
+
+    private func maskedCode(_ code: String) -> String {
+        // Show first 2 and last 2 characters, mask the rest
+        guard code.count > 6 else {
+            return String(repeating: "•", count: code.count)
+        }
+        let prefix = String(code.prefix(2))
+        let suffix = String(code.suffix(2))
+        let masked = String(repeating: "•", count: code.count - 4)
+        return prefix + masked + suffix
     }
 
     #if os(macOS)
@@ -749,6 +758,109 @@ struct AppRowView: View {
     }
 }
 
+// MARK: - App Sidebar Row
+
+struct AppSidebarRow: View {
+    let app: AppRecord
+    let isSelected: Bool
+    let selectedBatchId: UUID?
+    let onSelectApp: () -> Void
+    let onSelectBatch: (CodeBatch) -> Void
+    let onEditBatch: (CodeBatch) -> Void
+    let onExportBatch: (CodeBatch) -> Void
+    let onDeleteBatch: (CodeBatch) -> Void
+
+    @State private var isExpanded = false
+
+    private var sortedBatches: [CodeBatch] {
+        (app.batches ?? []).sorted { $0.importDate > $1.importDate }
+    }
+
+    private var hasBatches: Bool {
+        !sortedBatches.isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Main app row - tappable to select
+            Button {
+                onSelectApp()
+            } label: {
+                HStack(spacing: 8) {
+                    AppRowView(app: app)
+
+                    Spacer()
+
+                    // Expand/collapse chevron for batches
+                    if hasBatches {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isExpanded.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                                .frame(width: 20, height: 20)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.trailing, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            // Expandable batch list
+            if isExpanded && hasBatches {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(sortedBatches) { batch in
+                        Button {
+                            onSelectBatch(batch)
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(batch.name)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("\(batch.totalCodesCount)")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 8)
+                            .background(selectedBatchId == batch.id ? Color.accentColor.opacity(0.15) : Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("Rename Batch...") {
+                                onEditBatch(batch)
+                            }
+                            Button("Export Batch...") {
+                                onExportBatch(batch)
+                            }
+                            Divider()
+                            Button("Delete Batch", role: .destructive) {
+                                onDeleteBatch(batch)
+                            }
+                        }
+                    }
+                }
+                .padding(.leading, 42)
+                .padding(.top, 4)
+            }
+        }
+    }
+}
+
 // MARK: - App Context Menu
 
 struct AppContextMenu: View {
@@ -833,12 +945,40 @@ struct AppContextMenu: View {
 
 struct CodeDetailView: View {
     @Bindable var code: OfferCode
+    var isPrivacyModeEnabled: Bool = false
+
+    private var displayCode: String {
+        isPrivacyModeEnabled ? maskedCode(code.code) : code.code
+    }
+
+    private var displayURL: String {
+        isPrivacyModeEnabled ? maskedURL(code.redemptionURL) : code.redemptionURL
+    }
+
+    private func maskedCode(_ code: String) -> String {
+        guard code.count > 6 else {
+            return String(repeating: "•", count: code.count)
+        }
+        let prefix = String(code.prefix(2))
+        let suffix = String(code.suffix(2))
+        let masked = String(repeating: "•", count: code.count - 4)
+        return prefix + masked + suffix
+    }
+
+    private func maskedURL(_ url: String) -> String {
+        // Mask the code portion of the URL while keeping the domain visible
+        guard let urlObj = URL(string: url),
+              let host = urlObj.host else {
+            return String(repeating: "•", count: url.count)
+        }
+        return "https://\(host)/••••••••••••"
+    }
 
     var body: some View {
         Form {
             Section("Code") {
                 HStack {
-                    Text(code.code)
+                    Text(displayCode)
                         .font(.system(.title2, design: .monospaced))
                         .textSelection(.enabled)
 
@@ -850,13 +990,14 @@ struct CodeDetailView: View {
                         Image(systemName: "doc.on.doc")
                     }
                     .help("Copy code")
+                    .disabled(isPrivacyModeEnabled)
                     #if os(macOS)
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                     #endif
                 }
 
                 HStack {
-                    Text(code.redemptionURL)
+                    Text(displayURL)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -870,6 +1011,7 @@ struct CodeDetailView: View {
                         Image(systemName: "doc.on.doc")
                     }
                     .help("Copy URL")
+                    .disabled(isPrivacyModeEnabled)
 
                     Button {
                         if let url = URL(string: code.redemptionURL) {

@@ -114,10 +114,10 @@ struct SettingsView: View {
 
             APISettingsView()
                 .tabItem {
-                    Label("API", systemImage: "key")
+                    Label("App Store Connect", systemImage: "key")
                 }
         }
-        .frame(width: 450, height: 300)
+        .frame(width: 500, height: 400)
     }
 }
 
