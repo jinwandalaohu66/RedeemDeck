@@ -112,24 +112,60 @@ struct SettingsView: View {
                     Label("General", systemImage: "gear")
                 }
 
-            APISettingsView()
-                .tabItem {
-                    Label("App Store Connect", systemImage: "key")
-                }
+            // TODO: Re-enable when App Store Connect API import is ready
+            // APISettingsView()
+            //     .tabItem {
+            //         Label("App Store Connect", systemImage: "key")
+            //     }
         }
-        .frame(width: 500, height: 400)
+        .frame(width: 500, height: 300)
     }
 }
 
 struct GeneralSettingsView: View {
     @AppStorage("autoMarkRedeemed") private var autoMarkRedeemed = false
     @AppStorage("copyURLInsteadOfCode") private var copyURLInsteadOfCode = false
+    @AppStorage("shareMessageTemplate") private var shareMessageTemplate = "Here's a promo code for {appName}! Redeem it here: {url}"
+    @AppStorage("expirationAlertsEnabled") private var expirationAlertsEnabled = false
+    @State private var notificationPermissionGranted = false
 
     var body: some View {
         Form {
             Section {
                 Toggle("Auto-mark as redeemed when copying", isOn: $autoMarkRedeemed)
                 Toggle("Copy redemption URL instead of code", isOn: $copyURLInsteadOfCode)
+            }
+
+            Section("Notifications") {
+                Toggle("Alert when codes are expiring", isOn: $expirationAlertsEnabled)
+                    .onChange(of: expirationAlertsEnabled) { _, newValue in
+                        if newValue {
+                            Task {
+                                notificationPermissionGranted = await ExpirationNotificationService.shared.requestAuthorization()
+                                if !notificationPermissionGranted {
+                                    expirationAlertsEnabled = false
+                                }
+                            }
+                        }
+                    }
+
+                if expirationAlertsEnabled {
+                    Text("You'll be notified when codes are about to expire.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Share Message") {
+                TextEditor(text: $shareMessageTemplate)
+                    .frame(minHeight: 60)
+                    #if os(macOS)
+                    .font(.body)
+                    #endif
+
+                Text("Available placeholders: {appName}, {url}, {code}")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

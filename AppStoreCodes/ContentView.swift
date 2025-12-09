@@ -113,7 +113,11 @@ struct ContentView: View {
             }
         } message: {
             if let result = importResult {
-                Text("Imported \(result.importedCount) codes.\nSkipped \(result.skippedDuplicates) duplicates.")
+                if result.skippedDuplicates > 0 {
+                    Text("Imported \(result.importedCount) codes.\nSkipped \(result.skippedDuplicates) duplicate\(result.skippedDuplicates == 1 ? "" : "s").")
+                } else {
+                    Text("Imported \(result.importedCount) codes.")
+                }
             } else if let error = importError {
                 Text(error.localizedDescription)
             }
@@ -152,6 +156,17 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .copyURL)) { _ in
             copySelectedURL()
         }
+        .task {
+            await checkExpiringCodes()
+        }
+    }
+
+    /// Check for expiring codes and send notifications if enabled
+    private func checkExpiringCodes() async {
+        let expirationAlertsEnabled = UserDefaults.standard.bool(forKey: "expirationAlertsEnabled")
+        guard expirationAlertsEnabled else { return }
+
+        await ExpirationNotificationService.shared.checkExpiringCodes(in: modelContext)
     }
 
     // MARK: - Sidebar
@@ -200,12 +215,13 @@ struct ContentView: View {
                 }
                 .keyboardShortcut("i", modifiers: .command)
 
-                if api.isConfigured {
-                    Button(action: { showingFetchSheet = true }) {
-                        Label("Fetch from API", systemImage: "icloud.and.arrow.down")
-                    }
-                    .keyboardShortcut("f", modifiers: [.command, .shift])
-                }
+                // TODO: Re-enable when App Store Connect API import is ready
+                // if api.isConfigured {
+                //     Button(action: { showingFetchSheet = true }) {
+                //         Label("Fetch from API", systemImage: "icloud.and.arrow.down")
+                //     }
+                //     .keyboardShortcut("f", modifiers: [.command, .shift])
+                // }
             }
         }
         .overlay {
@@ -286,7 +302,7 @@ struct ContentView: View {
                         TableColumn("Status") { code in
                             if code.isRedeemed {
                                 Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(.secondary)
                             } else if code.isExpired {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundStyle(.red)
@@ -743,7 +759,7 @@ struct AppRowView: View {
                         .foregroundStyle(.green)
 
                     Label("\(app.redeemedCodesCount)", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.secondary)
                 }
                 .font(.caption)
             }
@@ -946,6 +962,18 @@ struct AppContextMenu: View {
 struct CodeDetailView: View {
     @Bindable var code: OfferCode
     var isPrivacyModeEnabled: Bool = false
+    @AppStorage("shareMessageTemplate") private var shareMessageTemplate = "Here's a promo code for {appName}! Redeem it here: {url}"
+
+    @State private var showingQRCode = false
+
+    private var shareMessage: String {
+        ShareMessageHelper.formatMessage(
+            template: shareMessageTemplate,
+            appName: code.app?.name,
+            url: code.redemptionURL,
+            code: code.code
+        )
+    }
 
     private var displayCode: String {
         isPrivacyModeEnabled ? maskedCode(code.code) : code.code
@@ -1021,6 +1049,37 @@ struct CodeDetailView: View {
                         Image(systemName: "safari")
                     }
                     .help("Open in browser")
+
+                    ShareLink(item: shareMessage) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .help("Share code")
+                    .disabled(isPrivacyModeEnabled)
+
+                    Button {
+                        showingQRCode.toggle()
+                    } label: {
+                        Image(systemName: "qrcode")
+                    }
+                    .help("Show QR code")
+                    .disabled(isPrivacyModeEnabled)
+                    .popover(isPresented: $showingQRCode, arrowEdge: .bottom) {
+                        VStack(spacing: 12) {
+                            if let qrCode = QRCodeGenerator.generate(from: code.redemptionURL, size: 200) {
+                                qrCode
+                                    .interpolation(.none)
+                                    .frame(width: 200, height: 200)
+                            } else {
+                                Text("Could not generate QR code")
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Text("Scan to redeem")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding()
+                    }
                 }
             }
 
