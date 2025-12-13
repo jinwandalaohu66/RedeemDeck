@@ -24,18 +24,18 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		B9CB09BC2EE733EC00397C7E /* AppStoreCodes.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AppStoreCodes.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		B9CB09CB2EE733ED00397C7E /* AppStoreCodesTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppStoreCodesTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		B9CB09D52EE733ED00397C7E /* AppStoreCodesUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppStoreCodesUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B9CB09BC2EE733EC00397C7E /* CodeVault.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodeVault.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B9CB09CB2EE733ED00397C7E /* CodeVaultTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CodeVaultTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B9CB09D52EE733ED00397C7E /* CodeVaultUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CodeVaultUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		B9CB0A3B2EE7559800397C7E /* Exceptions for "AppStoreCodes" folder in "AppStoreCodes" target */ = {
+		B9CB0A3B2EE7559800397C7E /* Exceptions for "AppStoreCodes" folder in "CodeVault" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
-			target = B9CB09BB2EE733EC00397C7E /* AppStoreCodes */;
+			target = B9CB09BB2EE733EC00397C7E /* CodeVault */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -43,7 +43,7 @@
 		B9CB09BE2EE733EC00397C7E /* AppStoreCodes */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				B9CB0A3B2EE7559800397C7E /* Exceptions for "AppStoreCodes" folder in "AppStoreCodes" target */,
+				B9CB0A3B2EE7559800397C7E /* Exceptions for "AppStoreCodes" folder in "CodeVault" target */,
 			);
 			path = AppStoreCodes;
 			sourceTree = "<group>";
@@ -98,9 +98,9 @@
 		B9CB09BD2EE733EC00397C7E /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				B9CB09BC2EE733EC00397C7E /* AppStoreCodes.app */,
-				B9CB09CB2EE733ED00397C7E /* AppStoreCodesTests.xctest */,
-				B9CB09D52EE733ED00397C7E /* AppStoreCodesUITests.xctest */,
+				B9CB09BC2EE733EC00397C7E /* CodeVault.app */,
+				B9CB09CB2EE733ED00397C7E /* CodeVaultTests.xctest */,
+				B9CB09D52EE733ED00397C7E /* CodeVaultUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -108,9 +108,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		B9CB09BB2EE733EC00397C7E /* AppStoreCodes */ = {
+		B9CB09BB2EE733EC00397C7E /* CodeVault */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B9CB09DF2EE733ED00397C7E /* Build configuration list for PBXNativeTarget "AppStoreCodes" */;
+			buildConfigurationList = B9CB09DF2EE733ED00397C7E /* Build configuration list for PBXNativeTarget "CodeVault" */;
 			buildPhases = (
 				B9CB09B82EE733EC00397C7E /* Sources */,
 				B9CB09B92EE733EC00397C7E /* Frameworks */,
@@ -123,16 +123,16 @@
 			fileSystemSynchronizedGroups = (
 				B9CB09BE2EE733EC00397C7E /* AppStoreCodes */,
 			);
-			name = AppStoreCodes;
+			name = CodeVault;
 			packageProductDependencies = (
 			);
 			productName = AppStoreCodes;
-			productReference = B9CB09BC2EE733EC00397C7E /* AppStoreCodes.app */;
+			productReference = B9CB09BC2EE733EC00397C7E /* CodeVault.app */;
 			productType = "com.apple.product-type.application";
 		};
-		B9CB09CA2EE733ED00397C7E /* AppStoreCodesTests */ = {
+		B9CB09CA2EE733ED00397C7E /* CodeVaultTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B9CB09E22EE733ED00397C7E /* Build configuration list for PBXNativeTarget "AppStoreCodesTests" */;
+			buildConfigurationList = B9CB09E22EE733ED00397C7E /* Build configuration list for PBXNativeTarget "CodeVaultTests" */;
 			buildPhases = (
 				B9CB09C72EE733ED00397C7E /* Sources */,
 				B9CB09C82EE733ED00397C7E /* Frameworks */,
@@ -146,16 +146,16 @@
 			fileSystemSynchronizedGroups = (
 				B9CB09CE2EE733ED00397C7E /* AppStoreCodesTests */,
 			);
-			name = AppStoreCodesTests;
+			name = CodeVaultTests;
 			packageProductDependencies = (
 			);
 			productName = AppStoreCodesTests;
-			productReference = B9CB09CB2EE733ED00397C7E /* AppStoreCodesTests.xctest */;
+			productReference = B9CB09CB2EE733ED00397C7E /* CodeVaultTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		B9CB09D42EE733ED00397C7E /* AppStoreCodesUITests */ = {
+		B9CB09D42EE733ED00397C7E /* CodeVaultUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B9CB09E52EE733ED00397C7E /* Build configuration list for PBXNativeTarget "AppStoreCodesUITests" */;
+			buildConfigurationList = B9CB09E52EE733ED00397C7E /* Build configuration list for PBXNativeTarget "CodeVaultUITests" */;
 			buildPhases = (
 				B9CB09D12EE733ED00397C7E /* Sources */,
 				B9CB09D22EE733ED00397C7E /* Frameworks */,
@@ -169,11 +169,11 @@
 			fileSystemSynchronizedGroups = (
 				B9CB09D82EE733ED00397C7E /* AppStoreCodesUITests */,
 			);
-			name = AppStoreCodesUITests;
+			name = CodeVaultUITests;
 			packageProductDependencies = (
 			);
 			productName = AppStoreCodesUITests;
-			productReference = B9CB09D52EE733ED00397C7E /* AppStoreCodesUITests.xctest */;
+			productReference = B9CB09D52EE733ED00397C7E /* CodeVaultUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
@@ -199,7 +199,7 @@
 					};
 				};
 			};
-			buildConfigurationList = B9CB09B72EE733EC00397C7E /* Build configuration list for PBXProject "AppStoreCodes" */;
+			buildConfigurationList = B9CB09B72EE733EC00397C7E /* Build configuration list for PBXProject "CodeVault" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -213,9 +213,9 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				B9CB09BB2EE733EC00397C7E /* AppStoreCodes */,
-				B9CB09CA2EE733ED00397C7E /* AppStoreCodesTests */,
-				B9CB09D42EE733ED00397C7E /* AppStoreCodesUITests */,
+				B9CB09BB2EE733EC00397C7E /* CodeVault */,
+				B9CB09CA2EE733ED00397C7E /* CodeVaultTests */,
+				B9CB09D42EE733ED00397C7E /* CodeVaultUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -271,12 +271,12 @@
 /* Begin PBXTargetDependency section */
 		B9CB09CD2EE733ED00397C7E /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = B9CB09BB2EE733EC00397C7E /* AppStoreCodes */;
+			target = B9CB09BB2EE733EC00397C7E /* CodeVault */;
 			targetProxy = B9CB09CC2EE733ED00397C7E /* PBXContainerItemProxy */;
 		};
 		B9CB09D72EE733ED00397C7E /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = B9CB09BB2EE733EC00397C7E /* AppStoreCodes */;
+			target = B9CB09BB2EE733EC00397C7E /* CodeVault */;
 			targetProxy = B9CB09D62EE733ED00397C7E /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -499,7 +499,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AppStoreCodes.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AppStoreCodes";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CodeVault.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/CodeVault";
 			};
 			name = Debug;
 		};
@@ -520,7 +520,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AppStoreCodes.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AppStoreCodes";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CodeVault.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/CodeVault";
 			};
 			name = Release;
 		};
@@ -565,7 +565,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		B9CB09B72EE733EC00397C7E /* Build configuration list for PBXProject "AppStoreCodes" */ = {
+		B9CB09B72EE733EC00397C7E /* Build configuration list for PBXProject "CodeVault" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B9CB09DD2EE733ED00397C7E /* Debug */,
@@ -574,7 +574,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		B9CB09DF2EE733ED00397C7E /* Build configuration list for PBXNativeTarget "AppStoreCodes" */ = {
+		B9CB09DF2EE733ED00397C7E /* Build configuration list for PBXNativeTarget "CodeVault" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B9CB09E02EE733ED00397C7E /* Debug */,
@@ -583,7 +583,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		B9CB09E22EE733ED00397C7E /* Build configuration list for PBXNativeTarget "AppStoreCodesTests" */ = {
+		B9CB09E22EE733ED00397C7E /* Build configuration list for PBXNativeTarget "CodeVaultTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B9CB09E32EE733ED00397C7E /* Debug */,
@@ -592,7 +592,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		B9CB09E52EE733ED00397C7E /* Build configuration list for PBXNativeTarget "AppStoreCodesUITests" */ = {
+		B9CB09E52EE733ED00397C7E /* Build configuration list for PBXNativeTarget "CodeVaultUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B9CB09E62EE733ED00397C7E /* Debug */,
