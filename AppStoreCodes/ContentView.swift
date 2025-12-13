@@ -964,8 +964,6 @@ struct CodeDetailView: View {
     var isPrivacyModeEnabled: Bool = false
     @AppStorage("shareMessageTemplate") private var shareMessageTemplate = "Here's a promo code for {appName}! Redeem it here: {url}"
 
-    @State private var showingQRCode = false
-
     private var shareMessage: String {
         ShareMessageHelper.formatMessage(
             template: shareMessageTemplate,
@@ -1056,30 +1054,34 @@ struct CodeDetailView: View {
                     .help("Share code")
                     .disabled(isPrivacyModeEnabled)
 
-                    Button {
-                        showingQRCode.toggle()
-                    } label: {
-                        Image(systemName: "qrcode")
-                    }
-                    .help("Show QR code")
-                    .disabled(isPrivacyModeEnabled)
-                    .popover(isPresented: $showingQRCode, arrowEdge: .bottom) {
-                        VStack(spacing: 12) {
-                            if let qrCode = QRCodeGenerator.generate(from: code.redemptionURL, size: 200) {
-                                qrCode
-                                    .interpolation(.none)
-                                    .frame(width: 200, height: 200)
-                            } else {
-                                Text("Could not generate QR code")
-                                    .foregroundStyle(.secondary)
-                            }
+                }
 
+                // QR Code displayed directly
+                if !isPrivacyModeEnabled {
+                    VStack(spacing: 12) {
+                        if let qrCode = QRCodeGenerator.generate(from: code.redemptionURL, size: 150) {
+                            qrCode
+                                .interpolation(.none)
+                                .frame(width: 150, height: 150)
+                        } else {
+                            Text("Could not generate QR code")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack(spacing: 16) {
                             Text("Scan to redeem")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+
+                            ShareLink(item: shareMessage) {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .padding()
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
                 }
             }
 
