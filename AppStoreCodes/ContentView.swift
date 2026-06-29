@@ -48,7 +48,11 @@ struct ContentView: View {
 
     // iOS export
     #if os(iOS)
-    @State private var exportingBatch: CodeBatch?
+    @State private var exportDocument = CSVExportDocument(csvContent: "")
+    @State private var exportFilename = "Codes.csv"
+    @State private var isExportingBatch = false
+    @State private var exportError: Error?
+    @State private var showingExportAlert = false
     #endif
 
     enum FilterMode: String, CaseIterable {
@@ -122,6 +126,26 @@ struct ContentView: View {
                 Text(error.localizedDescription)
             }
         }
+        #if os(iOS)
+        .fileExporter(
+            isPresented: $isExportingBatch,
+            document: exportDocument,
+            contentType: .commaSeparatedText,
+            defaultFilename: exportFilename
+        ) { result in
+            if case .failure(let error) = result {
+                exportError = error
+                showingExportAlert = true
+            }
+        }
+        .alert("Export Failed", isPresented: $showingExportAlert) {
+            Button("OK") {
+                exportError = nil
+            }
+        } message: {
+            Text(exportError?.localizedDescription ?? "The batch could not be exported.")
+        }
+        #endif
         .sheet(item: $editingApp) { app in
             EditAppSheet(app: app)
         }
@@ -297,80 +321,10 @@ struct ContentView: View {
 
                     Divider()
 
-                    // Code table
-                    Table(of: OfferCode.self, selection: $selectedCodes) {
-                        TableColumn("Status") { code in
-                            if code.isRedeemed {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.secondary)
-                            } else if code.isExpired {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.red)
-                            } else {
-                                Image(systemName: "circle")
-                                    .foregroundStyle(.green)
-                            }
-                        }
-                        .width(50)
-
-                        TableColumn("Code") { code in
-                            Text(isPrivacyModeEnabled ? maskedCode(code.code) : code.code)
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundStyle(code.isExpired && !code.isRedeemed ? .secondary : .primary)
-                        }
-                        .width(min: 180, ideal: 200)
-
-                        TableColumn("Assigned To") { code in
-                            Text(code.assignedTo ?? "—")
-                                .foregroundStyle(code.assignedTo == nil ? .secondary : .primary)
-                        }
-                        .width(min: 150, ideal: 200)
-
-                        TableColumn("Batch") { code in
-                            Text(code.batch?.name ?? "—")
-                                .foregroundStyle(.secondary)
-                        }
-                        .width(min: 100, ideal: 150)
-
-                        TableColumn("Expires") { code in
-                            if let days = code.daysUntilExpiration {
-                                if days < 0 {
-                                    Text("Expired")
-                                        .foregroundStyle(.red)
-                                } else if days == 0 {
-                                    Text("Today")
-                                        .foregroundStyle(.orange)
-                                } else if days <= 7 {
-                                    Text("\(days)d")
-                                        .foregroundStyle(.orange)
-                                } else {
-                                    Text(code.expirationDate!, format: .dateTime.month().day())
-                                        .foregroundStyle(.secondary)
-                                }
-                            } else {
-                                Text("—")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .width(80)
-
-                        TableColumn("Created") { code in
-                            Text(code.createdAt, format: .dateTime.month().day())
-                                .foregroundStyle(.secondary)
-                        }
-                        .width(80)
-                    } rows: {
-                        ForEach(filteredCodes) { code in
-                            TableRow(code)
-                                .contextMenu {
-                                    codeContextMenu(for: code)
-                                }
-                        }
-                    }
-                    .searchable(text: $searchText, prompt: "Search codes or users")
+                    codeCollectionView
                 }
                 .navigationTitle(selectedBatch?.name ?? app.name)
-                .navigationSubtitle(selectedBatch != nil ? app.name : "")
+                .platformNavigationSubtitle(selectedBatch != nil ? app.name : "")
                 .toolbar {
                     ToolbarItemGroup {
                         if !selectedCodes.isEmpty {
@@ -391,6 +345,107 @@ struct ContentView: View {
             } else {
                 ContentUnavailableView("Select an App", systemImage: "app", description: Text("Choose an app from the sidebar to view its codes."))
             }
+        }
+    }
+
+    @ViewBuilder
+    private var codeCollectionView: some View {
+        #if os(macOS)
+        Table(of: OfferCode.self, selection: $selectedCodes) {
+            TableColumn("Status") { code in
+                if code.isRedeemed {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                } else if code.isExpired {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                } else {
+                    Image(systemName: "circle")
+                        .foregroundStyle(.green)
+                }
+            }
+            .width(50)
+
+            TableColumn("Code") { code in
+                Text(isPrivacyModeEnabled ? maskedCode(code.code) : code.code)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(code.isExpired && !code.isRedeemed ? .secondary : .primary)
+            }
+            .width(min: 180, ideal: 200)
+
+            TableColumn("Assigned To") { code in
+                Text(code.assignedTo ?? "—")
+                    .foregroundStyle(code.assignedTo == nil ? .secondary : .primary)
+            }
+            .width(min: 150, ideal: 200)
+
+            TableColumn("Batch") { code in
+                Text(code.batch?.name ?? "—")
+                    .foregroundStyle(.secondary)
+            }
+            .width(min: 100, ideal: 150)
+
+            TableColumn("Expires") { code in
+                expirationLabel(for: code)
+            }
+            .width(80)
+
+            TableColumn("Created") { code in
+                Text(code.createdAt, format: .dateTime.month().day())
+                    .foregroundStyle(.secondary)
+            }
+            .width(80)
+        } rows: {
+            ForEach(filteredCodes) { code in
+                TableRow(code)
+                    .contextMenu {
+                        codeContextMenu(for: code)
+                    }
+            }
+        }
+        .searchable(text: $searchText, prompt: "Search codes or users")
+        #else
+        List(filteredCodes) { code in
+            NavigationLink {
+                CodeDetailView(code: code, isPrivacyModeEnabled: isPrivacyModeEnabled)
+            } label: {
+                OfferCodeListRow(
+                    code: code,
+                    displayCode: isPrivacyModeEnabled ? maskedCode(code.code) : code.code,
+                    isSelected: selectedCodes.contains(code.id)
+                )
+            }
+            .simultaneousGesture(TapGesture().onEnded {
+                selectedCodes = [code.id]
+            })
+            .contextMenu {
+                codeContextMenu(for: code)
+            }
+        }
+        .listStyle(.plain)
+        .searchable(text: $searchText, prompt: "Search codes or users")
+        #endif
+    }
+
+    @ViewBuilder
+    private func expirationLabel(for code: OfferCode) -> some View {
+        if let days = code.daysUntilExpiration {
+            if days < 0 {
+                Text("Expired")
+                    .foregroundStyle(.red)
+            } else if days == 0 {
+                Text("Today")
+                    .foregroundStyle(.orange)
+            } else if days <= 7 {
+                Text("\(days)d")
+                    .foregroundStyle(.orange)
+            } else if let expirationDate = code.expirationDate {
+                Text(expirationDate, format: .dateTime.month().day())
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Text("—")
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -558,20 +613,24 @@ struct ContentView: View {
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
 
-            var csvContent = ""
-            for code in batch.codes ?? [] {
-                csvContent += "\(code.code),\(code.redemptionURL),\(code.isRedeemed ? "redeemed" : "available"),\(code.assignedTo ?? "")\n"
-            }
-
-            try? csvContent.write(to: url, atomically: true, encoding: .utf8)
+            try? csvContent(for: batch).write(to: url, atomically: true, encoding: .utf8)
         }
     }
     #else
     private func exportBatch(_ batch: CodeBatch) {
-        // On iOS, we'll use the share sheet via exportingBatch state
-        exportingBatch = batch
+        exportDocument = CSVExportDocument(csvContent: csvContent(for: batch))
+        exportFilename = "\(batch.name).csv"
+        isExportingBatch = true
     }
     #endif
+
+    private func csvContent(for batch: CodeBatch) -> String {
+        (batch.codes ?? [])
+            .map { code in
+                "\(code.code),\(code.redemptionURL),\(code.isRedeemed ? "redeemed" : "available"),\(code.assignedTo ?? "")"
+            }
+            .joined(separator: "\n")
+    }
 
     private func deleteBatch(_ batch: CodeBatch) {
         modelContext.delete(batch)
@@ -645,10 +704,47 @@ struct ContentView: View {
     }
 }
 
+private extension View {
+    @ViewBuilder
+    func platformNavigationSubtitle(_ subtitle: String) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            self.navigationSubtitle(subtitle)
+        } else {
+            self
+        }
+        #else
+        self.navigationSubtitle(subtitle)
+        #endif
+    }
+}
+
 // MARK: - URL Identifiable Extension
 
 extension URL: @retroactive Identifiable {
     public var id: String { absoluteString }
+}
+
+struct CSVExportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.commaSeparatedText] }
+
+    var csvContent: String
+
+    init(csvContent: String) {
+        self.csvContent = csvContent
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents,
+              let csvContent = String(data: data, encoding: .utf8) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        self.csvContent = csvContent
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(csvContent.utf8))
+    }
 }
 
 // MARK: - CSV Import Config Sheet
@@ -716,7 +812,9 @@ struct CSVImportConfigSheet: View {
             }
             .padding()
         }
+        #if os(macOS)
         .frame(width: 400, height: 350)
+        #endif
     }
 }
 
@@ -771,6 +869,84 @@ struct AppRowView: View {
 
     private func copyToClipboard(_ string: String) {
         PlatformClipboard.copy(string)
+    }
+}
+
+struct OfferCodeListRow: View {
+    let code: OfferCode
+    let displayCode: String
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            statusIcon
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(displayCode)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(code.isExpired && !code.isRedeemed ? .secondary : .primary)
+                    .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    Text(code.assignedTo ?? "Unassigned")
+                    if let batchName = code.batch?.name {
+                        Text(batchName)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+
+            Spacer(minLength: 12)
+
+            VStack(alignment: .trailing, spacing: 4) {
+                expirationText
+
+                Text(code.createdAt, format: .dateTime.month().day())
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        if code.isRedeemed {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.secondary)
+        } else if code.isExpired {
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.red)
+        } else {
+            Image(systemName: "circle")
+                .foregroundStyle(.green)
+        }
+    }
+
+    @ViewBuilder
+    private var expirationText: some View {
+        if let days = code.daysUntilExpiration {
+            if days < 0 {
+                Text("Expired")
+                    .foregroundStyle(.red)
+            } else if days == 0 {
+                Text("Today")
+                    .foregroundStyle(.orange)
+            } else if days <= 7 {
+                Text("\(days)d")
+                    .foregroundStyle(.orange)
+            } else if let expirationDate = code.expirationDate {
+                Text(expirationDate, format: .dateTime.month().day())
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Text("—")
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -1312,7 +1488,9 @@ struct EditAppSheet: View {
             }
             .padding()
         }
+        #if os(macOS)
         .frame(width: 500, height: 600)
+        #endif
         .onAppear {
             loadCurrentValues()
         }
@@ -1403,7 +1581,9 @@ struct EditBatchSheet: View {
             }
             .padding()
         }
+        #if os(macOS)
         .frame(width: 400, height: 350)
+        #endif
         .onAppear {
             name = batch.name
             notes = batch.notes ?? ""
@@ -1509,7 +1689,9 @@ struct FetchFromAPISheet: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        #if os(macOS)
         .frame(width: 500, height: 400)
+        #endif
         .task {
             await loadApps()
         }
@@ -1930,7 +2112,9 @@ struct FetchFromAPISheet: View {
             }
             .padding()
         }
+        #if os(macOS)
         .frame(width: 400, height: 400)
+        #endif
     }
 
     private func createCodes() async {
