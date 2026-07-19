@@ -14,6 +14,43 @@ struct ParsedCode {
     let appStoreId: String
 }
 
+struct CSVImportDates {
+    let issueDate: Date
+    let expirationDate: Date
+
+    init(url: URL, calendar: Calendar = .current, fallbackDate: Date = Date()) {
+        let accessedSecurityScopedResource = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessedSecurityScopedResource {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let resourceValues = try? url.resourceValues(forKeys: [
+            .contentModificationDateKey,
+            .creationDateKey
+        ])
+        let documentDate = resourceValues?.contentModificationDate
+            ?? resourceValues?.creationDate
+            ?? fallbackDate
+        let issueDate = calendar.startOfDay(for: documentDate)
+
+        self.issueDate = issueDate
+        self.expirationDate = Self.defaultExpirationDate(
+            for: issueDate,
+            calendar: calendar
+        )
+    }
+
+    static func defaultExpirationDate(
+        for issueDate: Date,
+        calendar: Calendar = .current
+    ) -> Date {
+        let issueDay = calendar.startOfDay(for: issueDate)
+        return calendar.date(byAdding: .month, value: 6, to: issueDay) ?? issueDay
+    }
+}
+
 enum CSVImportError: LocalizedError {
     case fileReadError
     case invalidFormat
@@ -55,11 +92,14 @@ final class CSVImporter {
     ///   - expirationDate: Optional expiration date for all codes in this batch
     /// - Returns: Import result with statistics
     func importCodes(from url: URL, batchName: String? = nil, expirationDate: Date? = nil) throws -> CSVImportResult {
-        // Start accessing security-scoped resource
-        guard url.startAccessingSecurityScopedResource() else {
-            throw CSVImportError.fileReadError
+        // Security-scoped URLs need balanced access. Regular local URLs can
+        // legitimately return false and should still be read normally.
+        let accessedSecurityScopedResource = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessedSecurityScopedResource {
+                url.stopAccessingSecurityScopedResource()
+            }
         }
-        defer { url.stopAccessingSecurityScopedResource() }
 
         // Read file contents
         let content: String
@@ -69,7 +109,14 @@ final class CSVImporter {
             throw CSVImportError.fileReadError
         }
 
-        return try importCodes(fromCSVString: content, batchName: batchName ?? url.deletingPathExtension().lastPathComponent, source: .csv, expirationDate: expirationDate)
+        let effectiveExpirationDate = expirationDate ?? CSVImportDates(url: url).expirationDate
+
+        return try importCodes(
+            fromCSVString: content,
+            batchName: batchName ?? url.deletingPathExtension().lastPathComponent,
+            source: .csv,
+            expirationDate: effectiveExpirationDate
+        )
     }
 
     /// Imports codes from a CSV string (used by API imports)
@@ -130,6 +177,41 @@ final class CSVImporter {
             appStoreId: appStoreId,
             batchId: batch.id
         )
+    }
+
+    /// Fills expiration dates for CSV batches imported before document-based
+    /// expiration defaults were introduced. The original document date was not
+    /// persisted, so the retained batch import date is the best available proxy.
+    @discardableResult
+    func backfillMissingCSVExpirationDates(calendar: Calendar = .current) throws -> Int {
+        let batches = try modelContext.fetch(FetchDescriptor<CodeBatch>())
+        var updatedCodeCount = 0
+        var hasChanges = false
+
+        for batch in batches where batch.source == .csv {
+            let expirationDate = batch.expirationDate
+                ?? CSVImportDates.defaultExpirationDate(
+                    for: batch.importDate,
+                    calendar: calendar
+                )
+
+            if batch.expirationDate == nil {
+                batch.expirationDate = expirationDate
+                hasChanges = true
+            }
+
+            for code in batch.codes ?? [] where code.expirationDate == nil {
+                code.expirationDate = expirationDate
+                updatedCodeCount += 1
+                hasChanges = true
+            }
+        }
+
+        if hasChanges {
+            try modelContext.save()
+        }
+
+        return updatedCodeCount
     }
 
     /// Parses CSV content into ParsedCode array

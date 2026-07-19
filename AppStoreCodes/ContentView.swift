@@ -43,8 +43,8 @@ struct ContentView: View {
 
     // CSV Import configuration
     @State private var pendingImportURL: URL?
+    @State private var csvImportIssueDate = Date()
     @State private var csvImportExpirationDate = Calendar.current.date(byAdding: .month, value: 6, to: Date()) ?? Date()
-    @State private var csvImportUseExpiration = true
 
     // iOS export
     #if os(iOS)
@@ -94,7 +94,7 @@ struct ContentView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    pendingImportURL = url
+                    prepareCSVImport(from: url)
                 }
             case .failure(let error):
                 importError = error
@@ -104,8 +104,8 @@ struct ContentView: View {
         .sheet(item: $pendingImportURL) { url in
             CSVImportConfigSheet(
                 url: url,
+                issueDate: csvImportIssueDate,
                 expirationDate: $csvImportExpirationDate,
-                useExpiration: $csvImportUseExpiration,
                 onImport: { performCSVImport(url: url) },
                 onCancel: { pendingImportURL = nil }
             )
@@ -181,6 +181,7 @@ struct ContentView: View {
             copySelectedURL()
         }
         .task {
+            _ = try? CSVImporter(modelContext: modelContext).backfillMissingCSVExpirationDates()
             await checkExpiringCodes()
         }
     }
@@ -295,7 +296,7 @@ struct ContentView: View {
                         } label: {
                             Label("Get Next Code", systemImage: "arrow.right.circle")
                         }
-                        .disabled(filteredCodes.filter { !$0.isRedeemed }.isEmpty)
+                        .disabled(filteredCodes.filter { !$0.isRedeemed && !$0.isExpired }.isEmpty)
                         .keyboardShortcut("g", modifiers: .command)
 
                         // Privacy mode toggle
@@ -466,7 +467,7 @@ struct ContentView: View {
         case .all:
             break
         case .available:
-            codes = codes.filter { !$0.isRedeemed }
+            codes = codes.filter { !$0.isRedeemed && !$0.isExpired }
         case .redeemed:
             codes = codes.filter { $0.isRedeemed }
         }
@@ -551,7 +552,9 @@ struct ContentView: View {
     // MARK: - Actions
 
     private func getNextAvailableCode(for app: AppRecord) {
-        let availableCodes = (selectedBatch?.codes ?? app.codes ?? []).filter { !$0.isRedeemed }
+        let availableCodes = (selectedBatch?.codes ?? app.codes ?? []).filter {
+            !$0.isRedeemed && !$0.isExpired
+        }
         guard let nextCode = availableCodes.sorted(by: { $0.createdAt < $1.createdAt }).first else { return }
 
         // Copy to clipboard
@@ -654,7 +657,7 @@ struct ContentView: View {
                       let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
 
                 DispatchQueue.main.async {
-                    importFromURL(url)
+                    prepareCSVImport(from: url)
                 }
             }
             return true
@@ -698,9 +701,15 @@ struct ContentView: View {
     }
 
     private func performCSVImport(url: URL) {
-        let expiration = csvImportUseExpiration ? csvImportExpirationDate : nil
-        importFromURL(url, expirationDate: expiration)
+        importFromURL(url, expirationDate: csvImportExpirationDate)
         pendingImportURL = nil
+    }
+
+    private func prepareCSVImport(from url: URL) {
+        let dates = CSVImportDates(url: url)
+        csvImportIssueDate = dates.issueDate
+        csvImportExpirationDate = dates.expirationDate
+        pendingImportURL = url
     }
 }
 
@@ -751,12 +760,14 @@ struct CSVExportDocument: FileDocument {
 
 struct CSVImportConfigSheet: View {
     let url: URL
+    let issueDate: Date
     @Binding var expirationDate: Date
-    @Binding var useExpiration: Bool
     let onImport: () -> Void
     let onCancel: () -> Void
 
-    private let maxExpirationDate = Calendar.current.date(byAdding: .month, value: 6, to: Date()) ?? Date()
+    private var maxExpirationDate: Date {
+        CSVImportDates.defaultExpirationDate(for: issueDate)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -776,27 +787,31 @@ struct CSVImportConfigSheet: View {
                 }
 
                 Section("Expiration Date") {
-                    Toggle("Set expiration date for codes", isOn: $useExpiration)
+                    LabeledContent("Issued") {
+                        Text(issueDate, format: .dateTime.day().month().year())
+                    }
 
-                    if useExpiration {
-                        DatePicker(
-                            "Expires on",
-                            selection: $expirationDate,
-                            in: Date()...maxExpirationDate,
-                            displayedComponents: .date
-                        )
+                    DatePicker(
+                        "Expires on",
+                        selection: $expirationDate,
+                        in: issueDate...maxExpirationDate,
+                        displayedComponents: .date
+                    )
 
-                        Text("Maximum expiration: 6 months from today")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    Text("Defaults to 6 months from the document issue date")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
-                        HStack {
-                            ForEach([1, 3, 6], id: \.self) { months in
-                                Button("\(months) mo") {
-                                    expirationDate = Calendar.current.date(byAdding: .month, value: months, to: Date()) ?? Date()
-                                }
-                                .buttonStyle(.bordered)
+                    HStack {
+                        ForEach([1, 3, 6], id: \.self) { months in
+                            Button("\(months) mo") {
+                                expirationDate = Calendar.current.date(
+                                    byAdding: .month,
+                                    value: months,
+                                    to: issueDate
+                                ) ?? issueDate
                             }
+                            .buttonStyle(.bordered)
                         }
                     }
                 }
@@ -1300,6 +1315,13 @@ struct CodeDetailView: View {
                     Text(code.createdAt, format: .dateTime)
                 }
 
+                if let expirationDate = code.expirationDate {
+                    LabeledContent("Expires") {
+                        Text(expirationDate, format: .dateTime.day().month().year())
+                            .foregroundStyle(code.isExpired ? .red : .primary)
+                    }
+                }
+
                 if let batch = code.batch {
                     LabeledContent("Batch") {
                         Text(batch.name)
@@ -1548,6 +1570,13 @@ struct EditBatchSheet: View {
 
                 LabeledContent("Imported") {
                     Text(batch.importDate, format: .dateTime)
+                }
+
+                if let expirationDate = batch.expirationDate {
+                    LabeledContent("Expires") {
+                        Text(expirationDate, format: .dateTime.day().month().year())
+                            .foregroundStyle(batch.isExpired ? .red : .primary)
+                    }
                 }
 
                 LabeledContent("Source") {

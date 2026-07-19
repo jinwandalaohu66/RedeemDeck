@@ -22,12 +22,22 @@ struct AppStoreCodesApp: App {
             OfferCode.self,
         ])
 
-        // Configure for iCloud sync
-        let modelConfiguration = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: false,
-            cloudKitDatabase: .private("iCloud.com.mcsoftware.AppStoreCodes")
-        )
+        let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let modelConfiguration: ModelConfiguration
+
+        if isRunningTests {
+            modelConfiguration = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: true
+            )
+        } else {
+            // Configure production data for iCloud sync.
+            modelConfiguration = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: false,
+                cloudKitDatabase: .private("iCloud.com.mcsoftware.AppStoreCodes")
+            )
+        }
 
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
