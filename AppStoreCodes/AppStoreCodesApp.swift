@@ -115,6 +115,7 @@ struct AppStoreCodesApp: App {
         Settings {
             SettingsView()
         }
+        .modelContainer(sharedModelContainer)
         #endif
     }
 }
@@ -151,6 +152,7 @@ struct SettingsView: View {
 }
 
 struct GeneralSettingsView: View {
+    @Environment(\.modelContext) private var modelContext
     @AppStorage("autoMarkRedeemed") private var autoMarkRedeemed = false
     @AppStorage("copyURLInsteadOfCode") private var copyURLInsteadOfCode = false
     @AppStorage("shareMessageTemplate") private var shareMessageTemplate = "Here's a promo code for {appName}! Redeem it here: {url}"
@@ -172,7 +174,14 @@ struct GeneralSettingsView: View {
                                 notificationPermissionGranted = await ExpirationNotificationService.shared.requestAuthorization()
                                 if !notificationPermissionGranted {
                                     expirationAlertsEnabled = false
+                                    return
                                 }
+                                guard expirationAlertsEnabled else { return }
+                                await reconcileExpirationNotifications()
+                            }
+                        } else {
+                            Task {
+                                await ExpirationNotificationService.shared.cancelAll()
                             }
                         }
                     }
@@ -198,6 +207,14 @@ struct GeneralSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+
+    private func reconcileExpirationNotifications() async {
+        guard let batches = try? modelContext.fetch(FetchDescriptor<CodeBatch>()) else {
+            return
+        }
+        let snapshots = batches.compactMap(ExpirationNotificationSnapshot.init(batch:))
+        await ExpirationNotificationService.shared.reconcile(snapshots)
     }
 }
 

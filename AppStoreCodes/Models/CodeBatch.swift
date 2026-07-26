@@ -77,4 +77,11 @@ final class CodeBatch {
         guard let expirationDate = expirationDate else { return nil }
         return Calendar.current.dateComponents([.day], from: Date(), to: expirationDate).day
     }
+
+    func updateExpirationDate(_ expirationDate: Date?) {
+        self.expirationDate = expirationDate
+        for code in codes ?? [] {
+            code.expirationDate = expirationDate
+        }
+    }
 }

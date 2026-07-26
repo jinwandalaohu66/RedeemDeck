@@ -14,11 +14,60 @@ struct ParsedCode {
     let appStoreId: String
 }
 
+private enum CSVRowParser {
+    static func parse(_ row: String) -> [String]? {
+        var fields: [String] = []
+        var field = ""
+        var isInsideQuotes = false
+        var index = row.startIndex
+
+        while index < row.endIndex {
+            let character = row[index]
+
+            if character == "\"" {
+                let nextIndex = row.index(after: index)
+                if isInsideQuotes,
+                   nextIndex < row.endIndex,
+                   row[nextIndex] == "\"" {
+                    field.append("\"")
+                    index = row.index(after: nextIndex)
+                    continue
+                }
+                isInsideQuotes.toggle()
+            } else if character == "," && !isInsideQuotes {
+                fields.append(field)
+                field = ""
+            } else {
+                field.append(character)
+            }
+
+            index = row.index(after: index)
+        }
+
+        guard !isInsideQuotes else { return nil }
+        fields.append(field)
+        return fields
+    }
+}
+
+enum CSVCodeKind: Hashable {
+    case promo
+    case offer
+}
+
+/// Dates inferred from the imported document for the confirmation UI. The
+/// expiration date is a suggestion until the user confirms or edits it.
 struct CSVImportDates {
     let issueDate: Date
     let expirationDate: Date
+    let codeKind: CSVCodeKind
 
-    init(url: URL, calendar: Calendar = .current, fallbackDate: Date = Date()) {
+    init(
+        url: URL,
+        csvContent: String? = nil,
+        calendar: Calendar = .current,
+        fallbackDate: Date = Date()
+    ) {
         let accessedSecurityScopedResource = url.startAccessingSecurityScopedResource()
         defer {
             if accessedSecurityScopedResource {
@@ -34,20 +83,65 @@ struct CSVImportDates {
             ?? resourceValues?.creationDate
             ?? fallbackDate
         let issueDate = calendar.startOfDay(for: documentDate)
+        let content = csvContent ?? (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        let codeKind = Self.inferCodeKind(from: content)
 
         self.issueDate = issueDate
+        self.codeKind = codeKind
         self.expirationDate = Self.defaultExpirationDate(
             for: issueDate,
+            codeKind: codeKind,
             calendar: calendar
         )
     }
 
     static func defaultExpirationDate(
         for issueDate: Date,
+        codeKind: CSVCodeKind = .offer,
         calendar: Calendar = .current
     ) -> Date {
         let issueDay = calendar.startOfDay(for: issueDate)
-        return calendar.date(byAdding: .month, value: 6, to: issueDay) ?? issueDay
+        switch codeKind {
+        case .promo:
+            return calendar.date(byAdding: .day, value: 28, to: issueDay) ?? issueDay
+        case .offer:
+            return calendar.date(byAdding: .month, value: 6, to: issueDay) ?? issueDay
+        }
+    }
+
+    static func inferCodeKind(from content: String) -> CSVCodeKind {
+        let rows = content.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .compactMap(CSVRowParser.parse)
+
+        if let firstField = rows.first?.first {
+            let normalizedHeader = firstField
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"\u{FEFF}"))
+                .lowercased()
+                .filter { $0.isLetter || $0.isNumber }
+
+            if normalizedHeader == "promocode" {
+                return .promo
+            }
+            if normalizedHeader == "offercode" {
+                return .offer
+            }
+        }
+
+        let hasOfferRedemptionURL = rows.contains { fields in
+            guard fields.count > 1,
+                  let components = URLComponents(
+                    string: fields[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                  ) else { return false }
+
+            return components.queryItems?.contains {
+                $0.name.caseInsensitiveCompare("ctx") == .orderedSame &&
+                    $0.value?.caseInsensitiveCompare("offercodes") == .orderedSame
+            } == true
+        }
+
+        return hasOfferRedemptionURL ? .offer : .promo
     }
 }
 
@@ -120,14 +214,16 @@ final class CSVImporter {
             throw CSVImportError.fileReadError
         }
 
-        let effectiveExpirationDate = expirationDate ?? CSVImportDates(url: url).expirationDate
+        let importDates = CSVImportDates(url: url, csvContent: content)
+        let effectiveExpirationDate = expirationDate ?? importDates.expirationDate
+        let effectiveTargetApp = containsEmbeddedAppStoreID(in: content) ? nil : targetApp
 
         return try importCodes(
             fromCSVString: content,
             batchName: batchName ?? url.deletingPathExtension().lastPathComponent,
             source: .csv,
             expirationDate: effectiveExpirationDate,
-            targetApp: targetApp
+            targetApp: effectiveTargetApp
         )
     }
 
@@ -145,6 +241,11 @@ final class CSVImporter {
         expirationDate: Date? = nil,
         targetApp: AppRecord? = nil
     ) throws -> CSVImportResult {
+        let effectiveCodeKind = CSVImportDates.inferCodeKind(from: csvString)
+        let effectiveExpirationDate = expirationDate ?? (source == .csv
+            ? CSVImportDates.defaultExpirationDate(for: Date(), codeKind: effectiveCodeKind)
+            : nil)
+
         // Parse CSV content
         let parsedCodes = try parseCSV(
             csvString,
@@ -193,13 +294,17 @@ final class CSVImporter {
         let batch = CodeBatch(
             name: batchName,
             source: source,
-            expirationDate: expirationDate
+            expirationDate: effectiveExpirationDate
         )
         batch.app = app
         modelContext.insert(batch)
 
         for parsed in codesToImport {
-            let offerCode = OfferCode(code: parsed.code, redemptionURL: parsed.redemptionURL, expirationDate: expirationDate)
+            let offerCode = OfferCode(
+                code: parsed.code,
+                redemptionURL: parsed.redemptionURL,
+                expirationDate: effectiveExpirationDate
+            )
             offerCode.app = app
             offerCode.batch = batch
             modelContext.insert(offerCode)
@@ -264,7 +369,7 @@ final class CSVImporter {
             .filter { !$0.isEmpty }
 
         for line in lines {
-            guard let components = parseCSVRow(line), !components.isEmpty else {
+            guard let components = CSVRowParser.parse(line), !components.isEmpty else {
                 continue
             }
 
@@ -346,39 +451,13 @@ final class CSVImporter {
             normalized == "promocode"
     }
 
-    /// Parses one CSV record, including quoted fields and escaped quotes.
-    private func parseCSVRow(_ row: String) -> [String]? {
-        var fields: [String] = []
-        var field = ""
-        var isInsideQuotes = false
-        var index = row.startIndex
-
-        while index < row.endIndex {
-            let character = row[index]
-
-            if character == "\"" {
-                let nextIndex = row.index(after: index)
-                if isInsideQuotes,
-                   nextIndex < row.endIndex,
-                   row[nextIndex] == "\"" {
-                    field.append("\"")
-                    index = row.index(after: nextIndex)
-                    continue
-                }
-                isInsideQuotes.toggle()
-            } else if character == "," && !isInsideQuotes {
-                fields.append(field)
-                field = ""
-            } else {
-                field.append(character)
+    private func containsEmbeddedAppStoreID(in content: String) -> Bool {
+        content.components(separatedBy: .newlines).contains { line in
+            guard let fields = CSVRowParser.parse(line), fields.count > 1 else {
+                return false
             }
-
-            index = row.index(after: index)
+            return extractAppStoreId(from: normalizedField(fields[1])) != nil
         }
-
-        guard !isInsideQuotes else { return nil }
-        fields.append(field)
-        return fields
     }
 
     private func makeRedemptionURL(code: String, appStoreId: String) -> String {

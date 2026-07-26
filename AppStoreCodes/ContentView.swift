@@ -9,6 +9,18 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+@MainActor
+private func refreshExpirationNotification(for batch: CodeBatch) {
+    Task {
+        if UserDefaults.standard.bool(forKey: "expirationAlertsEnabled"),
+           let snapshot = ExpirationNotificationSnapshot(batch: batch) {
+            await ExpirationNotificationService.shared.schedule(snapshot)
+        } else {
+            await ExpirationNotificationService.shared.cancel(batchID: batch.id)
+        }
+    }
+}
+
 // MARK: - Main Content View
 
 struct ContentView: View {
@@ -44,7 +56,12 @@ struct ContentView: View {
     // CSV Import configuration
     @State private var pendingImportURL: URL?
     @State private var csvImportIssueDate = Date()
-    @State private var csvImportExpirationDate = Calendar.current.date(byAdding: .month, value: 6, to: Date()) ?? Date()
+    @State private var inferredCSVCodeKind: CSVCodeKind = .promo
+    @State private var csvCodeKind: CSVCodeKind = .promo
+    @State private var csvImportExpirationDate = CSVImportDates.defaultExpirationDate(
+        for: Date(),
+        codeKind: .promo
+    )
 
     // iOS export
     #if os(iOS)
@@ -104,7 +121,9 @@ struct ContentView: View {
         .sheet(item: $pendingImportURL) { url in
             CSVImportConfigSheet(
                 url: url,
-                issueDate: csvImportIssueDate,
+                issueDate: $csvImportIssueDate,
+                inferredCodeKind: inferredCSVCodeKind,
+                codeKind: $csvCodeKind,
                 expirationDate: $csvImportExpirationDate,
                 onImport: { performCSVImport(url: url) },
                 onCancel: { pendingImportURL = nil }
@@ -182,16 +201,22 @@ struct ContentView: View {
         }
         .task {
             _ = try? CSVImporter(modelContext: modelContext).backfillMissingCSVExpirationDates()
-            await checkExpiringCodes()
+            await reconcileExpirationNotifications()
         }
     }
 
-    /// Check for expiring codes and send notifications if enabled
-    private func checkExpiringCodes() async {
+    private func reconcileExpirationNotifications() async {
         let expirationAlertsEnabled = UserDefaults.standard.bool(forKey: "expirationAlertsEnabled")
-        guard expirationAlertsEnabled else { return }
+        guard expirationAlertsEnabled else {
+            await ExpirationNotificationService.shared.cancelAll()
+            return
+        }
 
-        await ExpirationNotificationService.shared.checkExpiringCodes(in: modelContext)
+        guard let batches = try? modelContext.fetch(FetchDescriptor<CodeBatch>()) else {
+            return
+        }
+        let snapshots = batches.compactMap(ExpirationNotificationSnapshot.init(batch:))
+        await ExpirationNotificationService.shared.reconcile(snapshots)
     }
 
     // MARK: - Sidebar
@@ -520,12 +545,18 @@ struct ContentView: View {
         if code.isRedeemed {
             Button {
                 code.markAsAvailable()
+                if let batch = code.batch {
+                    refreshExpirationNotification(for: batch)
+                }
             } label: {
                 Label("Mark as Available", systemImage: "circle")
             }
         } else {
             Button {
                 code.markAsRedeemed()
+                if let batch = code.batch {
+                    refreshExpirationNotification(for: batch)
+                }
             } label: {
                 Label("Mark as Redeemed", systemImage: "checkmark.circle")
             }
@@ -564,19 +595,29 @@ struct ContentView: View {
     }
 
     private func markSelectedAsRedeemed() {
+        var affectedBatches: [UUID: CodeBatch] = [:]
         for codeId in selectedCodes {
             if let code = filteredCodes.first(where: { $0.id == codeId }) {
                 code.markAsRedeemed()
+                if let batch = code.batch {
+                    affectedBatches[batch.id] = batch
+                }
             }
         }
+        affectedBatches.values.forEach(refreshExpirationNotification)
     }
 
     private func markSelectedAsAvailable() {
+        var affectedBatches: [UUID: CodeBatch] = [:]
         for codeId in selectedCodes {
             if let code = filteredCodes.first(where: { $0.id == codeId }) {
                 code.markAsAvailable()
+                if let batch = code.batch {
+                    affectedBatches[batch.id] = batch
+                }
             }
         }
+        affectedBatches.values.forEach(refreshExpirationNotification)
     }
 
     private func copyToClipboard(_ string: String) {
@@ -635,12 +676,25 @@ struct ContentView: View {
     }
 
     private func deleteBatch(_ batch: CodeBatch) {
+        Task {
+            await ExpirationNotificationService.shared.cancel(batchID: batch.id)
+        }
+        if selectedBatch == batch {
+            selectedBatch = nil
+        }
         modelContext.delete(batch)
     }
 
     private func deleteApp(_ app: AppRecord) {
+        let batchIDs = (app.batches ?? []).map(\.id)
+        Task {
+            for batchID in batchIDs {
+                await ExpirationNotificationService.shared.cancel(batchID: batchID)
+            }
+        }
         if selectedApp == app {
             selectedApp = nil
+            selectedBatch = nil
         }
         modelContext.delete(app)
     }
@@ -678,9 +732,14 @@ struct ContentView: View {
     private func importFromURL(_ url: URL, expirationDate: Date? = nil) {
         let importer = CSVImporter(modelContext: modelContext)
         do {
-            let result = try importer.importCodes(from: url, expirationDate: expirationDate)
+            let result = try importer.importCodes(
+                from: url,
+                expirationDate: expirationDate,
+                targetApp: selectedApp
+            )
             self.importResult = result
             self.showingImportAlert = true
+            scheduleExpirationNotification(for: result)
 
             // Select the newly imported app and auto-fetch metadata
             if let app = apps.first(where: { $0.appStoreId == result.appStoreId }) {
@@ -699,6 +758,19 @@ struct ContentView: View {
         }
     }
 
+    private func scheduleExpirationNotification(for result: CSVImportResult) {
+        guard UserDefaults.standard.bool(forKey: "expirationAlertsEnabled"),
+              let batchID = result.batchId else { return }
+
+        let descriptor = FetchDescriptor<CodeBatch>(
+            predicate: #Predicate { $0.id == batchID }
+        )
+        guard let batch = try? modelContext.fetch(descriptor).first,
+              batch.id == batchID else { return }
+
+        refreshExpirationNotification(for: batch)
+    }
+
     private func performCSVImport(url: URL) {
         importFromURL(url, expirationDate: csvImportExpirationDate)
         pendingImportURL = nil
@@ -707,6 +779,8 @@ struct ContentView: View {
     private func prepareCSVImport(from url: URL) {
         let dates = CSVImportDates(url: url)
         csvImportIssueDate = dates.issueDate
+        inferredCSVCodeKind = dates.codeKind
+        csvCodeKind = dates.codeKind
         csvImportExpirationDate = dates.expirationDate
         pendingImportURL = url
     }
@@ -759,14 +833,12 @@ struct CSVExportDocument: FileDocument {
 
 struct CSVImportConfigSheet: View {
     let url: URL
-    let issueDate: Date
+    @Binding var issueDate: Date
+    let inferredCodeKind: CSVCodeKind
+    @Binding var codeKind: CSVCodeKind
     @Binding var expirationDate: Date
     let onImport: () -> Void
     let onCancel: () -> Void
-
-    private var maxExpirationDate: Date {
-        CSVImportDates.defaultExpirationDate(for: issueDate)
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -781,39 +853,13 @@ struct CSVImportConfigSheet: View {
             Divider()
 
             Form {
-                Section("File") {
-                    LabeledContent("Filename", value: url.lastPathComponent)
-                }
-
-                Section("Expiration Date") {
-                    LabeledContent("Issued") {
-                        Text(issueDate, format: .dateTime.day().month().year())
-                    }
-
-                    DatePicker(
-                        "Expires on",
-                        selection: $expirationDate,
-                        in: issueDate...maxExpirationDate,
-                        displayedComponents: .date
-                    )
-
-                    Text("Defaults to 6 months from the document issue date")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    HStack {
-                        ForEach([1, 3, 6], id: \.self) { months in
-                            Button("\(months) mo") {
-                                expirationDate = Calendar.current.date(
-                                    byAdding: .month,
-                                    value: months,
-                                    to: issueDate
-                                ) ?? issueDate
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                    }
-                }
+                CSVImportFileSection(url: url)
+                CSVImportValiditySection(
+                    issueDate: $issueDate,
+                    inferredCodeKind: inferredCodeKind,
+                    codeKind: $codeKind,
+                    expirationDate: $expirationDate
+                )
             }
             .formStyle(.grouped)
 
@@ -827,8 +873,89 @@ struct CSVImportConfigSheet: View {
             .padding()
         }
         #if os(macOS)
-        .frame(width: 400, height: 350)
+        .frame(width: 440, height: 430)
         #endif
+    }
+}
+
+private struct CSVImportFileSection: View {
+    let url: URL
+
+    var body: some View {
+        Section("File") {
+            LabeledContent("Filename", value: url.lastPathComponent)
+        }
+    }
+}
+
+private struct CSVImportValiditySection: View {
+    @Binding var issueDate: Date
+    let inferredCodeKind: CSVCodeKind
+    @Binding var codeKind: CSVCodeKind
+    @Binding var expirationDate: Date
+
+    private var maximumOfferExpirationDate: Date {
+        CSVImportDates.defaultExpirationDate(
+            for: issueDate,
+            codeKind: .offer
+        )
+    }
+
+    var body: some View {
+        Section("Code Validity") {
+            Picker("Valid for", selection: $codeKind) {
+                Text("4 weeks (Promo code)").tag(CSVCodeKind.promo)
+                Text("Up to 6 months (Offer code)").tag(CSVCodeKind.offer)
+            }
+
+            LabeledContent("Detected") {
+                switch inferredCodeKind {
+                case .promo:
+                    Text("Promo code")
+                case .offer:
+                    Text("Offer code")
+                }
+            }
+
+            DatePicker(
+                "Generated on",
+                selection: $issueDate,
+                displayedComponents: .date
+            )
+
+            if codeKind == .promo {
+                LabeledContent("Expires on") {
+                    Text(expirationDate, format: .dateTime.day().month().year())
+                }
+
+                Text("App promo codes expire four weeks after they are generated.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                DatePicker(
+                    "Expires on",
+                    selection: $expirationDate,
+                    in: issueDate...maximumOfferExpirationDate,
+                    displayedComponents: .date
+                )
+
+                Text("Offer codes can be valid for up to six months. Confirm the expiration date from App Store Connect.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onChange(of: codeKind) { _, newValue in
+            expirationDate = CSVImportDates.defaultExpirationDate(
+                for: issueDate,
+                codeKind: newValue
+            )
+        }
+        .onChange(of: issueDate) { _, newValue in
+            expirationDate = CSVImportDates.defaultExpirationDate(
+                for: newValue,
+                codeKind: codeKind
+            )
+        }
     }
 }
 
@@ -1305,6 +1432,9 @@ struct CodeDetailView: View {
                         } else {
                             code.markAsAvailable()
                         }
+                        if let batch = code.batch {
+                            refreshExpirationNotification(for: batch)
+                        }
                     }
                 ))
 
@@ -1577,6 +1707,8 @@ struct EditBatchSheet: View {
     @Bindable var batch: CodeBatch
     @State private var name: String = ""
     @State private var notes: String = ""
+    @State private var hasExpirationDate = false
+    @State private var expirationDate = Date()
     @FocusState private var isNameFocused: Bool
 
     private var trimmedName: String {
@@ -1586,7 +1718,7 @@ struct EditBatchSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Rename Import")
+                Text("Edit Import")
                     .font(.headline)
                 Spacer()
             }
@@ -1612,11 +1744,20 @@ struct EditBatchSheet: View {
                     Text(batch.importDate, format: .dateTime)
                 }
 
-                if let expirationDate = batch.expirationDate {
-                    LabeledContent("Expires") {
-                        Text(expirationDate, format: .dateTime.day().month().year())
-                            .foregroundStyle(batch.isExpired ? .red : .primary)
+                Section("Expiration") {
+                    Toggle("Track expiration", isOn: $hasExpirationDate)
+
+                    if hasExpirationDate {
+                        DatePicker(
+                            "Expires on",
+                            selection: $expirationDate,
+                            displayedComponents: .date
+                        )
                     }
+
+                    Text("Changes apply to every code in this import.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 LabeledContent("Source") {
@@ -1641,8 +1782,7 @@ struct EditBatchSheet: View {
                 Spacer()
 
                 Button("Save") {
-                    batch.name = trimmedName
-                    batch.notes = notes.isEmpty ? nil : notes
+                    saveChanges()
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -1651,13 +1791,23 @@ struct EditBatchSheet: View {
             .padding()
         }
         #if os(macOS)
-        .frame(width: 400, height: 350)
+        .frame(width: 420, height: 430)
         #endif
         .onAppear {
             name = batch.name
             notes = batch.notes ?? ""
+            hasExpirationDate = batch.expirationDate != nil
+            expirationDate = batch.expirationDate ?? Date()
             isNameFocused = true
         }
+    }
+
+    private func saveChanges() {
+        batch.name = trimmedName
+        batch.notes = notes.isEmpty ? nil : notes
+        batch.updateExpirationDate(hasExpirationDate ? expirationDate : nil)
+
+        refreshExpirationNotification(for: batch)
     }
 }
 
@@ -2334,8 +2484,6 @@ struct FetchFromAPISheet: View {
     }
 
     private func importCodesFromCSV(_ content: String, appName: String, appId: String, batchName: String, expirationDate: Date? = nil) throws -> CSVImportResult {
-        let lines = content.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-
         let descriptor = FetchDescriptor<AppRecord>(predicate: #Predicate { $0.appStoreId == appId })
         let appRecord: AppRecord
         let isNewApp: Bool
@@ -2349,30 +2497,22 @@ struct FetchFromAPISheet: View {
             isNewApp = true
         }
 
-        let codeBatch = CodeBatch(name: batchName, source: .api, expirationDate: expirationDate)
-        codeBatch.app = appRecord
-        modelContext.insert(codeBatch)
+        let result = try CSVImporter(modelContext: modelContext).importCodes(
+            fromCSVString: content,
+            batchName: batchName,
+            source: .api,
+            expirationDate: expirationDate,
+            targetApp: appRecord
+        )
 
-        let existingCodes = Set((appRecord.codes ?? []).map { $0.code })
-        var importedCount = 0
-        var skippedDuplicates = 0
-
-        for line in lines {
-            let components = line.components(separatedBy: ",")
-            guard components.count >= 2 else { continue }
-            let code = components[0].trimmingCharacters(in: .whitespaces)
-            let url = components[1].trimmingCharacters(in: .whitespaces)
-
-            if existingCodes.contains(code) { skippedDuplicates += 1; continue }
-
-            let offerCode = OfferCode(code: code, redemptionURL: url, expirationDate: expirationDate)
-            offerCode.app = appRecord
-            offerCode.batch = codeBatch
-            modelContext.insert(offerCode)
-            importedCount += 1
+        if let batchID = result.batchId {
+            let batchDescriptor = FetchDescriptor<CodeBatch>(
+                predicate: #Predicate { $0.id == batchID }
+            )
+            if let batch = try? modelContext.fetch(batchDescriptor).first {
+                refreshExpirationNotification(for: batch)
+            }
         }
-
-        try modelContext.save()
 
         // Auto-fetch metadata for new apps
         if isNewApp || !appRecord.hasMetadata {
@@ -2381,7 +2521,7 @@ struct FetchFromAPISheet: View {
             }
         }
 
-        return CSVImportResult(importedCount: importedCount, skippedDuplicates: skippedDuplicates, appStoreId: appId, batchId: codeBatch.id)
+        return result
     }
 }
 

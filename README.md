@@ -83,6 +83,8 @@ Code,Redemption URL
 EXAMPLE-CODE,https://apps.apple.com/redeem?id=123456789&code=EXAMPLE-CODE
 ```
 
+Before importing, CodeVault infers whether the file contains app promo codes or offer codes and asks you to confirm the validity period. App promo codes default to four weeks from generation. Offer codes allow you to confirm their App Store Connect expiration date, up to six months from generation. You can correct the expiration later from Edit Import, which updates every code in that batch.
+
 Do not commit real offer codes, App Store Connect private keys, or screenshots containing unmasked codes.
 
 ## Testing

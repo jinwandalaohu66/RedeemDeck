@@ -43,6 +43,40 @@ struct AppStoreCodesTests {
         ) == DateComponents(year: 2027, month: 2, day: 28))
     }
 
+    @Test func promotionalCodeExpirationDefaultsToFourWeeksAfterIssueDate() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let issueDate = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 8,
+            day: 31
+        )))
+
+        let expirationDate = CSVImportDates.defaultExpirationDate(
+            for: issueDate,
+            codeKind: .promo,
+            calendar: calendar
+        )
+
+        #expect(calendar.dateComponents(
+            [.year, .month, .day],
+            from: expirationDate
+        ) == DateComponents(year: 2026, month: 9, day: 28))
+    }
+
+    @Test @MainActor
+    func infersPromoAndOfferCodeKindsFromCSVContent() {
+        #expect(CSVImportDates.inferCodeKind(from: "PROMO123") == .promo)
+        #expect(CSVImportDates.inferCodeKind(from: "Promo Code\nPROMO123") == .promo)
+        #expect(CSVImportDates.inferCodeKind(from: "Offer Code\nOFFER123") == .offer)
+        #expect(CSVImportDates.inferCodeKind(
+            from: "CODE123,https://apps.apple.com/redeem?ctx=offercodes&id=123&code=CODE123"
+        ) == .offer)
+        #expect(CSVImportDates.inferCodeKind(
+            from: "Promo Code,Notes\nPROMO123,mention ctx=offercodes in documentation"
+        ) == .promo)
+    }
+
     @Test @MainActor
     func backfillsExistingCSVBatchAndCodeExpirationDates() throws {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
@@ -88,6 +122,27 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
+    func editingABatchExpirationUpdatesEveryCode() throws {
+        let container = try makeInMemoryContainer()
+        let batch = CodeBatch(name: "Promo Codes", source: .csv)
+        let firstCode = OfferCode(code: "FIRST", redemptionURL: "https://example.com/first")
+        let secondCode = OfferCode(code: "SECOND", redemptionURL: "https://example.com/second")
+        firstCode.batch = batch
+        secondCode.batch = batch
+        container.mainContext.insert(batch)
+        container.mainContext.insert(firstCode)
+        container.mainContext.insert(secondCode)
+        let correctedExpirationDate = Date(timeIntervalSince1970: 1_800_000_000)
+
+        batch.updateExpirationDate(correctedExpirationDate)
+
+        #expect(batch.expirationDate == correctedExpirationDate)
+        #expect((batch.codes ?? []).allSatisfy {
+            $0.expirationDate == correctedExpirationDate
+        })
+    }
+
+    @Test @MainActor
     func importedDocumentDefaultsExpirationFromItsModificationDate() throws {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
@@ -112,7 +167,7 @@ struct AppStoreCodesTests {
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("csv")
         defer { try? FileManager.default.removeItem(at: fileURL) }
-        try "ABCDEFGHIJKLMNOPQR,https://apps.apple.com/redeem?id=123&code=ABCDEFGHIJKLMNOPQR"
+        try "ABCDEFGHIJKLMNOPQR,https://apps.apple.com/redeem?ctx=offercodes&id=123&code=ABCDEFGHIJKLMNOPQR"
             .write(to: fileURL, atomically: true, encoding: .utf8)
         var resourceValues = URLResourceValues()
         resourceValues.contentModificationDate = issueDate
@@ -127,6 +182,81 @@ struct AppStoreCodesTests {
         #expect(codes.count == 1)
         #expect(batches.first?.expirationDate == expectedExpirationDate)
         #expect(codes.first?.expirationDate == expectedExpirationDate)
+    }
+
+    @Test @MainActor
+    func importedPromoDocumentDefaultsToFourWeeks() throws {
+        let container = try makeInMemoryContainer()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let issueDate = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 5,
+            day: 28
+        )))
+        var fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("csv")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        try "Promo Code\nPROMO123"
+            .write(to: fileURL, atomically: true, encoding: .utf8)
+        var resourceValues = URLResourceValues()
+        resourceValues.contentModificationDate = issueDate
+        try fileURL.setResourceValues(resourceValues)
+        let app = AppRecord(name: "Test App", appStoreId: "123")
+        container.mainContext.insert(app)
+
+        _ = try CSVImporter(modelContext: container.mainContext)
+            .importCodes(from: fileURL, targetApp: app)
+
+        let batches = try container.mainContext.fetch(FetchDescriptor<CodeBatch>())
+        let codes = try container.mainContext.fetch(FetchDescriptor<OfferCode>())
+        let currentCalendar = Calendar.current
+        let expectedComponents = DateComponents(year: 2026, month: 6, day: 25)
+        #expect(batches.first?.expirationDate.map {
+            currentCalendar.dateComponents([.year, .month, .day], from: $0)
+        } == expectedComponents)
+        #expect(codes.first?.expirationDate.map {
+            currentCalendar.dateComponents([.year, .month, .day], from: $0)
+        } == expectedComponents)
+    }
+
+    @Test @MainActor
+    func explicitExpirationOverridesTheInferredPromoDefault() throws {
+        let container = try makeInMemoryContainer()
+        let app = AppRecord(name: "Test App", appStoreId: "123")
+        container.mainContext.insert(app)
+        let confirmedExpirationDate = Date(timeIntervalSince1970: 1_800_000_000)
+
+        _ = try CSVImporter(modelContext: container.mainContext).importCodes(
+            fromCSVString: "Promo Code\nPROMO123",
+            batchName: "Confirmed Promo",
+            expirationDate: confirmedExpirationDate,
+            targetApp: app
+        )
+
+        let batches = try container.mainContext.fetch(FetchDescriptor<CodeBatch>())
+        let codes = try container.mainContext.fetch(FetchDescriptor<OfferCode>())
+        #expect(batches.first?.expirationDate == confirmedExpirationDate)
+        #expect(codes.first?.expirationDate == confirmedExpirationDate)
+    }
+
+    @Test @MainActor
+    func apiOfferImportPreservesItsActualExpirationDate() throws {
+        let container = try makeInMemoryContainer()
+        let apiExpirationDate = Date(timeIntervalSince1970: 1_900_000_000)
+
+        _ = try CSVImporter(modelContext: container.mainContext).importCodes(
+            fromCSVString: "Offer Code,Redemption URL\nOFFER123,https://apps.apple.com/redeem?ctx=offercodes&id=123&code=OFFER123",
+            batchName: "API Offer",
+            source: .api,
+            expirationDate: apiExpirationDate
+        )
+
+        let batches = try container.mainContext.fetch(FetchDescriptor<CodeBatch>())
+        let codes = try container.mainContext.fetch(FetchDescriptor<OfferCode>())
+        #expect(batches.first?.expirationDate == apiExpirationDate)
+        #expect(codes.first?.expirationDate == apiExpirationDate)
     }
 
     @Test @MainActor
@@ -148,6 +278,27 @@ struct AppStoreCodesTests {
         #expect(apps.map(\.appStoreId) == ["123"])
         #expect(batches.map(\.name) == ["Quoted"])
         #expect(codes.map(\.code) == ["A1"])
+    }
+
+    @Test @MainActor
+    func URLBearingImportUsesItsEmbeddedAppInsteadOfTheSelectedFallback() throws {
+        let container = try makeInMemoryContainer()
+        let selectedApp = AppRecord(name: "Selected App", appStoreId: "123")
+        container.mainContext.insert(selectedApp)
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("csv")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        try "OFFER123,https://apps.apple.com/redeem?ctx=offercodes&id=999&code=OFFER123"
+            .write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let result = try CSVImporter(modelContext: container.mainContext)
+            .importCodes(from: fileURL, targetApp: selectedApp)
+
+        let codes = try container.mainContext.fetch(FetchDescriptor<OfferCode>())
+        #expect(result.appStoreId == "999")
+        #expect(codes.first?.app?.appStoreId == "999")
+        #expect((selectedApp.codes ?? []).isEmpty)
     }
 
     @Test @MainActor
