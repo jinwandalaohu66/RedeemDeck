@@ -23,12 +23,29 @@ final class AppStoreCodesUITests: XCTestCase {
     }
 
     @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
+    func testRightClickingAnImportOpensRenameSheet() throws {
         let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
         app.launch()
+        app.activate()
 
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
+        let importButton = app.buttons["import-Original Filename"]
+        XCTAssertTrue(importButton.waitForExistence(timeout: 3))
+        app.activate()
+        importButton.rightClick()
+
+        let renameMenuItem = app.menuItems["Rename Import..."]
+        XCTAssertTrue(renameMenuItem.waitForExistence(timeout: 2))
+        renameMenuItem.click()
+
+        let nameField = app.textFields["rename-import-name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 2))
+        nameField.click()
+        nameField.typeKey("a", modifierFlags: .command)
+        nameField.typeText("Lifetime")
+        app.buttons["Save"].click()
+
+        XCTAssertTrue(app.buttons["import-Lifetime"].waitForExistence(timeout: 2))
     }
 
     @MainActor

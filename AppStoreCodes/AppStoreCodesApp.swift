@@ -23,9 +23,14 @@ struct AppStoreCodesApp: App {
         ])
 
         let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        #if DEBUG
+        let isRunningUITests = ProcessInfo.processInfo.arguments.contains("--ui-testing")
+        #else
+        let isRunningUITests = false
+        #endif
         let modelConfiguration: ModelConfiguration
 
-        if isRunningTests {
+        if isRunningTests || isRunningUITests {
             modelConfiguration = ModelConfiguration(
                 schema: schema,
                 isStoredInMemoryOnly: true
@@ -40,7 +45,20 @@ struct AppStoreCodesApp: App {
         }
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
+
+            #if DEBUG
+            if isRunningUITests {
+                let app = AppRecord(name: "UI Test App", appStoreId: "123456789")
+                let batch = CodeBatch(name: "Original Filename", source: .csv)
+                batch.app = app
+                container.mainContext.insert(app)
+                container.mainContext.insert(batch)
+                try container.mainContext.save()
+            }
+            #endif
+
+            return container
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }

@@ -56,6 +56,8 @@ enum CSVImportError: LocalizedError {
     case invalidFormat
     case noValidCodes
     case duplicateCodesFound(count: Int)
+    case targetAppRequired
+    case appStoreIdMismatch
 
     var errorDescription: String? {
         switch self {
@@ -67,6 +69,10 @@ enum CSVImportError: LocalizedError {
             return "No valid codes found in the file."
         case .duplicateCodesFound(let count):
             return "Found \(count) duplicate codes that were skipped."
+        case .targetAppRequired:
+            return "Choose an app before importing a file that contains codes without redemption URLs."
+        case .appStoreIdMismatch:
+            return "The file contains codes for more than one app, or does not match the selected app."
         }
     }
 }
@@ -75,7 +81,7 @@ struct CSVImportResult {
     let importedCount: Int
     let skippedDuplicates: Int
     let appStoreId: String
-    let batchId: UUID
+    let batchId: UUID?
 }
 
 final class CSVImporter {
@@ -91,7 +97,12 @@ final class CSVImporter {
     ///   - batchName: Optional name for the batch (defaults to filename)
     ///   - expirationDate: Optional expiration date for all codes in this batch
     /// - Returns: Import result with statistics
-    func importCodes(from url: URL, batchName: String? = nil, expirationDate: Date? = nil) throws -> CSVImportResult {
+    func importCodes(
+        from url: URL,
+        batchName: String? = nil,
+        expirationDate: Date? = nil,
+        targetApp: AppRecord? = nil
+    ) throws -> CSVImportResult {
         // Security-scoped URLs need balanced access. Regular local URLs can
         // legitimately return false and should still be read normally.
         let accessedSecurityScopedResource = url.startAccessingSecurityScopedResource()
@@ -115,7 +126,8 @@ final class CSVImporter {
             fromCSVString: content,
             batchName: batchName ?? url.deletingPathExtension().lastPathComponent,
             source: .csv,
-            expirationDate: effectiveExpirationDate
+            expirationDate: effectiveExpirationDate,
+            targetApp: targetApp
         )
     }
 
@@ -126,53 +138,78 @@ final class CSVImporter {
     ///   - source: The import source (.csv or .api)
     ///   - expirationDate: Optional expiration date for all codes in this batch
     /// - Returns: Import result with statistics
-    func importCodes(fromCSVString csvString: String, batchName: String, source: ImportSource = .csv, expirationDate: Date? = nil) throws -> CSVImportResult {
+    func importCodes(
+        fromCSVString csvString: String,
+        batchName: String,
+        source: ImportSource = .csv,
+        expirationDate: Date? = nil,
+        targetApp: AppRecord? = nil
+    ) throws -> CSVImportResult {
         // Parse CSV content
-        let parsedCodes = try parseCSV(csvString)
+        let parsedCodes = try parseCSV(
+            csvString,
+            targetAppStoreId: targetApp?.appStoreId
+        )
 
         guard !parsedCodes.isEmpty else {
             throw CSVImportError.noValidCodes
         }
 
-        // All codes should have the same App Store ID
+        // Parsing guarantees that every row belongs to the same app.
         guard let appStoreId = parsedCodes.first?.appStoreId else {
             throw CSVImportError.noValidCodes
         }
 
         // Find or create the App
-        let app = findOrCreateApp(appStoreId: appStoreId)
-
-        // Create batch
-        let batch = CodeBatch(name: batchName, source: source)
-        batch.app = app
-        batch.expirationDate = expirationDate
-        modelContext.insert(batch)
+        let app = targetApp ?? findOrCreateApp(appStoreId: appStoreId)
 
         // Get existing codes for this app to detect duplicates
-        let existingCodes = Set((app.codes ?? []).map { $0.code })
+        var seenCodes = Set((app.codes ?? []).map { $0.code })
 
-        // Import codes
-        var importedCount = 0
+        // Filter duplicates before inserting a batch so an all-duplicate import
+        // does not leave an empty batch behind.
+        var codesToImport: [ParsedCode] = []
         var skippedDuplicates = 0
 
         for parsed in parsedCodes {
-            if existingCodes.contains(parsed.code) {
+            if seenCodes.contains(parsed.code) {
                 skippedDuplicates += 1
                 continue
             }
 
+            seenCodes.insert(parsed.code)
+            codesToImport.append(parsed)
+        }
+
+        guard !codesToImport.isEmpty else {
+            return CSVImportResult(
+                importedCount: 0,
+                skippedDuplicates: skippedDuplicates,
+                appStoreId: appStoreId,
+                batchId: nil
+            )
+        }
+
+        let batch = CodeBatch(
+            name: batchName,
+            source: source,
+            expirationDate: expirationDate
+        )
+        batch.app = app
+        modelContext.insert(batch)
+
+        for parsed in codesToImport {
             let offerCode = OfferCode(code: parsed.code, redemptionURL: parsed.redemptionURL, expirationDate: expirationDate)
             offerCode.app = app
             offerCode.batch = batch
             modelContext.insert(offerCode)
-            importedCount += 1
         }
 
         // Save changes
         try modelContext.save()
 
         return CSVImportResult(
-            importedCount: importedCount,
+            importedCount: codesToImport.count,
             skippedDuplicates: skippedDuplicates,
             appStoreId: appStoreId,
             batchId: batch.id
@@ -215,38 +252,143 @@ final class CSVImporter {
     }
 
     /// Parses CSV content into ParsedCode array
-    private func parseCSV(_ content: String) throws -> [ParsedCode] {
+    private func parseCSV(
+        _ content: String,
+        targetAppStoreId: String?
+    ) throws -> [ParsedCode] {
         var results: [ParsedCode] = []
+        var discoveredAppStoreId = targetAppStoreId
 
         let lines = content.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
 
         for line in lines {
-            // Split by comma
-            let components = line.components(separatedBy: ",")
+            guard let components = parseCSVRow(line), !components.isEmpty else {
+                continue
+            }
 
-            guard components.count >= 2 else { continue }
+            let code = normalizedField(components[0])
 
-            let code = components[0].trimmingCharacters(in: .whitespaces)
-            let url = components[1].trimmingCharacters(in: .whitespaces)
+            if isHeader(code) {
+                continue
+            }
 
-            // Validate code format (18-char alphanumeric)
             guard isValidCode(code) else { continue }
 
-            // Extract App Store ID from URL
-            guard let appStoreId = extractAppStoreId(from: url) else { continue }
+            let suppliedURL = components.count > 1
+                ? normalizedField(components[1])
+                : ""
+            let urlAppStoreId = suppliedURL.isEmpty
+                ? nil
+                : extractAppStoreId(from: suppliedURL)
 
-            results.append(ParsedCode(code: code, redemptionURL: url, appStoreId: appStoreId))
+            if let targetAppStoreId,
+               let urlAppStoreId,
+               targetAppStoreId != urlAppStoreId {
+                throw CSVImportError.appStoreIdMismatch
+            }
+
+            if let urlAppStoreId {
+                if let discoveredAppStoreId,
+                   discoveredAppStoreId != urlAppStoreId {
+                    throw CSVImportError.appStoreIdMismatch
+                }
+                discoveredAppStoreId = urlAppStoreId
+            }
+
+            guard let appStoreId = urlAppStoreId ?? targetAppStoreId else {
+                if suppliedURL.isEmpty {
+                    throw CSVImportError.targetAppRequired
+                }
+                continue
+            }
+
+            let redemptionURL = suppliedURL.isEmpty
+                ? makeRedemptionURL(code: code, appStoreId: appStoreId)
+                : suppliedURL
+
+            results.append(ParsedCode(
+                code: code,
+                redemptionURL: redemptionURL,
+                appStoreId: appStoreId
+            ))
         }
 
         return results
     }
 
-    /// Validates that the code is 18 characters alphanumeric
+    /// Apple-generated and custom offer codes vary in length. Apple limits
+    /// custom codes to 64 ASCII alphanumeric characters.
     private func isValidCode(_ code: String) -> Bool {
-        let alphanumericSet = CharacterSet.alphanumerics
-        return code.count == 18 && code.unicodeScalars.allSatisfy { alphanumericSet.contains($0) }
+        guard (1...64).contains(code.utf8.count) else { return false }
+        return code.utf8.allSatisfy { byte in
+            (48...57).contains(byte) ||
+                (65...90).contains(byte) ||
+                (97...122).contains(byte)
+        }
+    }
+
+    private func normalizedField(_ field: String) -> String {
+        field.trimmingCharacters(
+            in: .whitespacesAndNewlines.union(
+                CharacterSet(charactersIn: "\u{FEFF}")
+            )
+        )
+    }
+
+    private func isHeader(_ field: String) -> Bool {
+        let normalized = field
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
+        return normalized == "code" ||
+            normalized == "offercode" ||
+            normalized == "promocode"
+    }
+
+    /// Parses one CSV record, including quoted fields and escaped quotes.
+    private func parseCSVRow(_ row: String) -> [String]? {
+        var fields: [String] = []
+        var field = ""
+        var isInsideQuotes = false
+        var index = row.startIndex
+
+        while index < row.endIndex {
+            let character = row[index]
+
+            if character == "\"" {
+                let nextIndex = row.index(after: index)
+                if isInsideQuotes,
+                   nextIndex < row.endIndex,
+                   row[nextIndex] == "\"" {
+                    field.append("\"")
+                    index = row.index(after: nextIndex)
+                    continue
+                }
+                isInsideQuotes.toggle()
+            } else if character == "," && !isInsideQuotes {
+                fields.append(field)
+                field = ""
+            } else {
+                field.append(character)
+            }
+
+            index = row.index(after: index)
+        }
+
+        guard !isInsideQuotes else { return nil }
+        fields.append(field)
+        return fields
+    }
+
+    private func makeRedemptionURL(code: String, appStoreId: String) -> String {
+        var components = URLComponents(string: "https://apps.apple.com/redeem")!
+        components.queryItems = [
+            URLQueryItem(name: "ctx", value: "offercodes"),
+            URLQueryItem(name: "id", value: appStoreId),
+            URLQueryItem(name: "code", value: code),
+        ]
+        return components.url!.absoluteString
     }
 
     /// Extracts the App Store ID from the redemption URL

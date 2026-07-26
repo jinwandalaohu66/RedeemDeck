@@ -220,15 +220,14 @@ struct ContentView: View {
                         },
                         onDeleteBatch: { batch in
                             deleteBatch(batch)
+                        },
+                        onEditApp: {
+                            editingApp = app
+                        },
+                        onDeleteApp: {
+                            deleteApp(app)
                         }
                     )
-                    .contextMenu {
-                        AppContextMenu(
-                            app: app,
-                            onEdit: { editingApp = app },
-                            onDelete: { deleteApp(app) }
-                        )
-                    }
                 }
             }
         }
@@ -976,8 +975,16 @@ struct AppSidebarRow: View {
     let onEditBatch: (CodeBatch) -> Void
     let onExportBatch: (CodeBatch) -> Void
     let onDeleteBatch: (CodeBatch) -> Void
+    let onEditApp: () -> Void
+    let onDeleteApp: () -> Void
 
-    @State private var isExpanded = false
+    @State private var isExpanded = {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--ui-testing")
+        #else
+        false
+        #endif
+    }()
 
     private var sortedBatches: [CodeBatch] {
         (app.batches ?? []).sorted { $0.importDate > $1.importDate }
@@ -989,36 +996,48 @@ struct AppSidebarRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Main app row - tappable to select
-            Button {
-                onSelectApp()
-            } label: {
-                HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Button {
+                    onSelectApp()
+                } label: {
                     AppRowView(app: app)
-
-                    Spacer()
-
-                    // Expand/collapse chevron for batches
-                    if hasBatches {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                isExpanded.toggle()
-                            }
-                        } label: {
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                                .frame(width: 20, height: 20)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
-                .padding(.trailing, 4)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                Menu {
+                    AppContextMenu(
+                        app: app,
+                        onEdit: onEditApp,
+                        onDelete: onDeleteApp
+                    )
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                if hasBatches {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isExpanded.toggle()
+                        }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .buttonStyle(.plain)
+            .padding(.trailing, 4)
             .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
@@ -1047,8 +1066,9 @@ struct AppSidebarRow: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("import-\(batch.name)")
                         .contextMenu {
-                            Button("Rename Batch...") {
+                            Button("Rename Import...") {
                                 onEditBatch(batch)
                             }
                             Button("Export Batch...") {
@@ -1557,11 +1577,31 @@ struct EditBatchSheet: View {
     @Bindable var batch: CodeBatch
     @State private var name: String = ""
     @State private var notes: String = ""
+    @FocusState private var isNameFocused: Bool
+
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack {
+                Text("Rename Import")
+                    .font(.headline)
+                Spacer()
+            }
+            .padding([.horizontal, .top])
+
             Form {
-                TextField("Batch Name", text: $name)
+                Section {
+                    TextField("Import Name", text: $name)
+                        .focused($isNameFocused)
+                        .accessibilityIdentifier("rename-import-name")
+
+                    Text("Use a name that describes the offer, such as “Lifetime” or “3 Months Free”.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 Section("Notes") {
                     TextEditor(text: $notes)
@@ -1601,12 +1641,12 @@ struct EditBatchSheet: View {
                 Spacer()
 
                 Button("Save") {
-                    batch.name = name
+                    batch.name = trimmedName
                     batch.notes = notes.isEmpty ? nil : notes
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(name.isEmpty)
+                .disabled(trimmedName.isEmpty)
             }
             .padding()
         }
@@ -1616,6 +1656,7 @@ struct EditBatchSheet: View {
         .onAppear {
             name = batch.name
             notes = batch.notes ?? ""
+            isNameFocused = true
         }
     }
 }

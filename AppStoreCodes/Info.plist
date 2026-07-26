@@ -4,8 +4,8 @@
 <dict>
 	<key>CFBundleDisplayName</key>
 	<string>CodeVault</string>
-	<key>UILaunchStoryboardName</key>
-	<string>LaunchScreen</string>
+	<key>UILaunchScreen</key>
+	<dict/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
