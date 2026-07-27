@@ -259,6 +259,101 @@ struct AppStoreCodesTests {
         #expect(codes.first?.expirationDate == apiExpirationDate)
     }
 
+    @Test
+    func sentCodeIsUnavailableWithoutBeingRedeemed() {
+        let code = OfferCode(code: "AUDIT1", redemptionURL: "https://example.com/AUDIT1")
+        let sentAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+        #expect(code.isAvailable)
+
+        code.markAsSent(
+            at: sentAt,
+            assignedTo: "Taylor",
+            notes: "Launch post in #announcements"
+        )
+
+        #expect(!code.isAvailable)
+        #expect(code.sentAt == sentAt)
+        #expect(code.assignedTo == "Taylor")
+        #expect(code.notes == "Launch post in #announcements")
+        #expect(!code.isRedeemed)
+        #expect(code.redeemedDate == nil)
+    }
+
+    @Test
+    func redemptionKeepsTheSentAuditEventDistinct() {
+        let code = OfferCode(code: "AUDIT2", redemptionURL: "https://example.com/AUDIT2")
+        let sentAt = Date(timeIntervalSince1970: 1_800_000_000)
+        code.markAsSent(at: sentAt, assignedTo: "Morgan")
+
+        code.markAsRedeemed()
+
+        #expect(code.sentAt == sentAt)
+        #expect(code.isRedeemed)
+        #expect(code.redeemedDate != nil)
+        #expect(!code.isAvailable)
+    }
+
+    @Test
+    func markingCodeUnsentPreservesRedemption() {
+        let code = OfferCode(code: "AUDIT3", redemptionURL: "https://example.com/AUDIT3")
+        code.markAsSent(at: Date(timeIntervalSince1970: 1_800_000_000))
+        code.markAsRedeemed()
+        let redeemedDate = code.redeemedDate
+
+        code.markAsUnsent()
+
+        #expect(code.sentAt == nil)
+        #expect(code.isRedeemed)
+        #expect(code.redeemedDate == redeemedDate)
+        #expect(!code.isAvailable)
+    }
+
+    @Test
+    func markingCodeUnredeemedPreservesSentAuditEvent() {
+        let code = OfferCode(code: "AUDIT4", redemptionURL: "https://example.com/AUDIT4")
+        let sentAt = Date(timeIntervalSince1970: 1_800_000_000)
+        code.markAsSent(at: sentAt)
+        code.markAsRedeemed()
+
+        code.markAsUnredeemed()
+
+        #expect(!code.isRedeemed)
+        #expect(code.redeemedDate == nil)
+        #expect(code.sentAt == sentAt)
+        #expect(!code.isAvailable)
+    }
+
+    @Test
+    func makingCodeAvailableClearsLifecycleDates() {
+        let code = OfferCode(code: "AUDIT5", redemptionURL: "https://example.com/AUDIT5")
+        code.markAsSent(at: Date(timeIntervalSince1970: 1_800_000_000))
+        code.markAsRedeemed()
+
+        code.markAsAvailable()
+
+        #expect(code.sentAt == nil)
+        #expect(code.redeemedDate == nil)
+        #expect(!code.isRedeemed)
+        #expect(code.isAvailable)
+    }
+
+    @Test
+    func sentCodesAreExcludedFromAppAndBatchAvailabilityCounts() {
+        let app = AppRecord(name: "Audit App", appStoreId: "123")
+        let batch = CodeBatch(name: "Launch", source: .csv)
+        let availableCode = OfferCode(code: "AVAILABLE", redemptionURL: "https://example.com/available")
+        let sentCode = OfferCode(code: "SENT", redemptionURL: "https://example.com/sent")
+        availableCode.app = app
+        availableCode.batch = batch
+        sentCode.app = app
+        sentCode.batch = batch
+        sentCode.markAsSent()
+
+        #expect(app.availableCodesCount == 1)
+        #expect(batch.availableCodesCount == 1)
+    }
+
     @Test @MainActor
     func importsBOMHeaderAndQuotedCSVFields() throws {
         let container = try makeInMemoryContainer()
@@ -433,6 +528,57 @@ struct AppStoreCodesTests {
         #expect(codes.map(\.code) == ["PERSIST1"])
         #expect(codes.first?.app?.appStoreId == "999")
         #expect(codes.first?.batch?.name == "Persistent")
+    }
+
+    @Test @MainActor
+    func sentAuditMetadataPersistsAfterReopeningOnDiskStore() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("codes.store")
+        let sentAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+        do {
+            let configuration = ModelConfiguration(url: storeURL)
+            let container = try ModelContainer(
+                for: AppRecord.self,
+                CodeBatch.self,
+                OfferCode.self,
+                configurations: configuration
+            )
+            let code = OfferCode(
+                code: "AUDIT-PERSIST",
+                redemptionURL: "https://example.com/AUDIT-PERSIST"
+            )
+            code.markAsSent(
+                at: sentAt,
+                assignedTo: "Jamie",
+                notes: "Creator campaign on Mastodon"
+            )
+            container.mainContext.insert(code)
+            try container.mainContext.save()
+        }
+
+        let configuration = ModelConfiguration(url: storeURL)
+        let container = try ModelContainer(
+            for: AppRecord.self,
+            CodeBatch.self,
+            OfferCode.self,
+            configurations: configuration
+        )
+        let code = try #require(
+            container.mainContext.fetch(FetchDescriptor<OfferCode>()).first
+        )
+        #expect(code.sentAt == sentAt)
+        #expect(code.assignedTo == "Jamie")
+        #expect(code.notes == "Creator campaign on Mastodon")
+        #expect(!code.isRedeemed)
+        #expect(code.redeemedDate == nil)
+        #expect(!code.isAvailable)
     }
 
 }

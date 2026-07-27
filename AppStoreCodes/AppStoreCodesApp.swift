@@ -141,13 +141,20 @@ struct SettingsView: View {
                     Label("General", systemImage: "gear")
                 }
 
+            TrackingSettingsView()
+                .tabItem {
+                    Label("Tracking", systemImage: "eye")
+                }
+
             // TODO: Re-enable when App Store Connect API import is ready
             // APISettingsView()
             //     .tabItem {
             //         Label("App Store Connect", systemImage: "key")
             //     }
         }
-        .frame(width: 500, height: 300)
+        #if os(macOS)
+        .frame(width: 500, height: 380)
+        #endif
     }
 }
 

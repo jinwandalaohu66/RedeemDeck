@@ -32,6 +32,7 @@ final class KeychainService {
     static let shared = KeychainService()
 
     private let service = "com.appstorecodesmanager.api"
+    private let trackingTokenAccount = "tracking-api-token"
 
     private init() {}
 
@@ -102,6 +103,82 @@ final class KeychainService {
         } catch {
             return false
         }
+    }
+
+    // MARK: - Tracking API Token Storage
+
+    /// Stores a backend-specific bearer token outside UserDefaults and the app bundle.
+    func saveTrackingAPIToken(_ token: String, forAPIBaseURL apiBaseURL: String) throws {
+        try saveTrackingAPIToken(token, account: trackingTokenAccount(for: apiBaseURL))
+    }
+
+    private func saveTrackingAPIToken(_ token: String, account: String) throws {
+        let normalizedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = normalizedToken.data(using: .utf8), !normalizedToken.isEmpty else {
+            throw KeychainError.invalidData
+        }
+
+        let query = trackingTokenQuery(account: account)
+        SecItemDelete(query as CFDictionary)
+
+        var item = query
+        item[kSecValueData as String] = data
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        let status = SecItemAdd(item as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw KeychainError.unexpectedStatus(status)
+        }
+    }
+
+    func getTrackingAPIToken(forAPIBaseURL apiBaseURL: String) throws -> String {
+        try getTrackingAPIToken(account: trackingTokenAccount(for: apiBaseURL))
+    }
+
+    private func getTrackingAPIToken(account: String) throws -> String {
+        var query = trackingTokenQuery(account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else {
+            if status == errSecItemNotFound {
+                throw KeychainError.itemNotFound
+            }
+            throw KeychainError.unexpectedStatus(status)
+        }
+        guard let data = result as? Data,
+              let token = String(data: data, encoding: .utf8) else {
+            throw KeychainError.invalidData
+        }
+        return token
+    }
+
+    func deleteTrackingAPIToken(forAPIBaseURL apiBaseURL: String) throws {
+        try deleteTrackingAPIToken(account: trackingTokenAccount(for: apiBaseURL))
+    }
+
+    private func deleteTrackingAPIToken(account: String) throws {
+        let status = SecItemDelete(trackingTokenQuery(account: account) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainError.unexpectedStatus(status)
+        }
+    }
+
+    func hasTrackingAPIToken(forAPIBaseURL apiBaseURL: String) -> Bool {
+        (try? getTrackingAPIToken(forAPIBaseURL: apiBaseURL)) != nil
+    }
+
+    private func trackingTokenAccount(for apiBaseURL: String) -> String {
+        "\(trackingTokenAccount)-\(apiBaseURL.lowercased())"
+    }
+
+    private func trackingTokenQuery(account: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
     }
 
     // MARK: - Issuer ID Storage

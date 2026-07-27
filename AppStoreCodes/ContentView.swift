@@ -25,7 +25,10 @@ private func refreshExpirationNotification(for batch: CodeBatch) {
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \AppRecord.name) private var apps: [AppRecord]
+    @AppStorage(TrackingSettingsKeys.apiBaseURL) private var trackingAPIBaseURL = ""
+    @AppStorage(TrackingSettingsKeys.isEnabled) private var isTrackingEnabled = false
 
     @State private var selectedApp: AppRecord?
     @State private var selectedBatch: CodeBatch?
@@ -38,6 +41,12 @@ struct ContentView: View {
     @State private var filterMode: FilterMode = .all
     @State private var sortOrder: SortOrder = .newest
     @State private var isTargeted = false
+    @State private var trackingErrorMessage: String?
+    @State private var hasTrackingRefreshFailure = false
+
+    #if os(iOS)
+    @State private var showingSettings = false
+    #endif
 
     // Edit states
     @State private var editingApp: AppRecord?
@@ -178,6 +187,30 @@ struct ContentView: View {
                 }
             }
         }
+        #if os(iOS)
+        .sheet(isPresented: $showingSettings) {
+            NavigationStack {
+                SettingsView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") {
+                                showingSettings = false
+                            }
+                        }
+                    }
+            }
+        }
+        #endif
+        .alert("Tracking Unavailable", isPresented: Binding(
+            get: { trackingErrorMessage != nil },
+            set: { if !$0 { trackingErrorMessage = nil } }
+        )) {
+            Button("OK") {
+                trackingErrorMessage = nil
+            }
+        } message: {
+            Text(trackingErrorMessage ?? "The tracked link could not be prepared.")
+        }
         // Menu bar command handlers
         .onReceive(NotificationCenter.default.publisher(for: .importCSV)) { _ in
             isImporting = true
@@ -202,6 +235,13 @@ struct ContentView: View {
         .task {
             _ = try? CSVImporter(modelContext: modelContext).backfillMissingCSVExpirationDates()
             await reconcileExpirationNotifications()
+            await refreshTrackedCodeStatuses()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            Task {
+                await refreshTrackedCodeStatuses()
+            }
         }
     }
 
@@ -264,6 +304,14 @@ struct ContentView: View {
                 }
                 .keyboardShortcut("i", modifiers: .command)
 
+                #if os(iOS)
+                Button {
+                    showingSettings = true
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                #endif
+
                 // TODO: Re-enable when App Store Connect API import is ready
                 // if api.isConfigured {
                 //     Button(action: { showingFetchSheet = true }) {
@@ -320,7 +368,7 @@ struct ContentView: View {
                         } label: {
                             Label("Get Next Code", systemImage: "arrow.right.circle")
                         }
-                        .disabled(filteredCodes.filter { !$0.isRedeemed && !$0.isExpired }.isEmpty)
+                        .disabled(filteredCodes.filter(\.isAvailable).isEmpty)
                         .keyboardShortcut("g", modifiers: .command)
 
                         // Privacy mode toggle
@@ -336,6 +384,12 @@ struct ContentView: View {
                         }
                         .help(isPrivacyModeEnabled ? "Show codes (Privacy mode)" : "Hide codes (Privacy mode)")
                         .keyboardShortcut("h", modifiers: [.command, .shift])
+
+                        if hasTrackingRefreshFailure {
+                            Label("Tracking status may be stale", systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
 
                         Text("\(filteredCodes.count) codes")
                             .foregroundStyle(.secondary)
@@ -378,16 +432,7 @@ struct ContentView: View {
         #if os(macOS)
         Table(of: OfferCode.self, selection: $selectedCodes) {
             TableColumn("Status") { code in
-                if code.isRedeemed {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                } else if code.isExpired {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.red)
-                } else {
-                    Image(systemName: "circle")
-                        .foregroundStyle(.green)
-                }
+                OfferCodeStatusIcon(status: code.displayStatus)
             }
             .width(50)
 
@@ -398,11 +443,33 @@ struct ContentView: View {
             }
             .width(min: 180, ideal: 200)
 
-            TableColumn("Assigned To") { code in
+            TableColumn("Recipient or Campaign") { code in
                 Text(code.assignedTo ?? "—")
                     .foregroundStyle(code.assignedTo == nil ? .secondary : .primary)
             }
             .width(min: 150, ideal: 200)
+
+            TableColumn("Sent") { code in
+                if let sentAt = code.sentAt {
+                    Text(sentAt, format: .dateTime.month().day())
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("—")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .width(80)
+
+            TableColumn("Seen") { code in
+                if let firstSeenAt = code.firstSeenAt {
+                    Text(firstSeenAt, format: .dateTime.month().day())
+                        .foregroundStyle(.purple)
+                } else {
+                    Text("—")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .width(80)
 
             TableColumn("Batch") { code in
                 Text(code.batch?.name ?? "—")
@@ -428,7 +495,7 @@ struct ContentView: View {
                     }
             }
         }
-        .searchable(text: $searchText, prompt: "Search codes or users")
+        .searchable(text: $searchText, prompt: "Search codes, recipients, or notes")
         #else
         List(filteredCodes) { code in
             NavigationLink {
@@ -448,7 +515,7 @@ struct ContentView: View {
             }
         }
         .listStyle(.plain)
-        .searchable(text: $searchText, prompt: "Search codes or users")
+        .searchable(text: $searchText, prompt: "Search codes, recipients, or notes")
         #endif
     }
 
@@ -491,7 +558,7 @@ struct ContentView: View {
         case .all:
             break
         case .available:
-            codes = codes.filter { !$0.isRedeemed && !$0.isExpired }
+            codes = codes.filter(\.isAvailable)
         case .redeemed:
             codes = codes.filter { $0.isRedeemed }
         }
@@ -527,7 +594,9 @@ struct ContentView: View {
         }
 
         Button {
-            copyToClipboard(code.redemptionURL)
+            Task {
+                await copyDistributionURL(for: code)
+            }
         } label: {
             Label("Copy Redemption URL", systemImage: "link")
         }
@@ -541,6 +610,26 @@ struct ContentView: View {
         }
 
         Divider()
+
+        if code.sentAt == nil {
+            Button {
+                code.markAsSent(at: Date())
+                if let batch = code.batch {
+                    refreshExpirationNotification(for: batch)
+                }
+            } label: {
+                Label("Mark as Sent", systemImage: "paperplane.circle")
+            }
+        } else {
+            Button {
+                code.markAsUnsent()
+                if let batch = code.batch {
+                    refreshExpirationNotification(for: batch)
+                }
+            } label: {
+                Label("Mark as Unsent", systemImage: "paperplane.circle.fill")
+            }
+        }
 
         if code.isRedeemed {
             Button {
@@ -582,16 +671,19 @@ struct ContentView: View {
     // MARK: - Actions
 
     private func getNextAvailableCode(for app: AppRecord) {
-        let availableCodes = (selectedBatch?.codes ?? app.codes ?? []).filter {
-            !$0.isRedeemed && !$0.isExpired
-        }
+        let availableCodes = (selectedBatch?.codes ?? app.codes ?? []).filter(\.isAvailable)
         guard let nextCode = availableCodes.sorted(by: { $0.createdAt < $1.createdAt }).first else { return }
-
-        // Copy to clipboard
-        copyToClipboard(nextCode.code)
 
         // Select the code
         selectedCodes = [nextCode.id]
+
+        if isTrackingEnabled {
+            Task {
+                await copyDistributionURL(for: nextCode)
+            }
+        } else {
+            copyToClipboard(nextCode.code)
+        }
     }
 
     private func markSelectedAsRedeemed() {
@@ -633,7 +725,67 @@ struct ContentView: View {
     private func copySelectedURL() {
         guard let codeId = selectedCodes.first,
               let code = filteredCodes.first(where: { $0.id == codeId }) else { return }
-        copyToClipboard(code.redemptionURL)
+        Task {
+            await copyDistributionURL(for: code)
+        }
+    }
+
+    private func copyDistributionURL(for code: OfferCode) async {
+        do {
+            let url = try await DistributionCoordinator.shared.effectiveURL(
+                for: code,
+                trackingEnabled: isTrackingEnabled,
+                apiBaseURL: trackingAPIBaseURL,
+                apiToken: trackingAPIToken,
+                modelContext: modelContext
+            )
+            copyToClipboard(url.absoluteString)
+        } catch {
+            trackingErrorMessage = error.localizedDescription
+        }
+    }
+
+    private var trackingAPIToken: String {
+        trackingAPIToken(for: trackingAPIBaseURL)
+    }
+
+    private func trackingAPIToken(for apiBaseURL: String) -> String {
+        (try? KeychainService.shared.getTrackingAPIToken(forAPIBaseURL: apiBaseURL)) ?? ""
+    }
+
+    private func refreshTrackedCodeStatuses() async {
+        guard let codes = try? modelContext.fetch(FetchDescriptor<OfferCode>()) else {
+            return
+        }
+
+        let trackedCodes = codes.filter { $0.trackingLinkID != nil }
+        guard !trackedCodes.isEmpty else {
+            hasTrackingRefreshFailure = false
+            return
+        }
+
+        var refreshFailed = false
+        let groups = Dictionary(grouping: trackedCodes) {
+            $0.trackingAPIBaseURL ?? trackingAPIBaseURL
+        }
+        for (baseURL, codes) in groups {
+            let token = trackingAPIToken(for: baseURL)
+            guard !baseURL.isEmpty, !token.isEmpty else {
+                refreshFailed = true
+                continue
+            }
+            do {
+                try await DistributionCoordinator.shared.refreshStatuses(
+                    for: codes,
+                    currentAPIBaseURL: baseURL,
+                    apiToken: token,
+                    modelContext: modelContext
+                )
+            } catch {
+                refreshFailed = true
+            }
+        }
+        hasTrackingRefreshFailure = refreshFailed
     }
 
     private func maskedCode(_ code: String) -> String {
@@ -1020,7 +1172,7 @@ struct OfferCodeListRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            statusIcon
+            OfferCodeStatusIcon(status: code.displayStatus)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(displayCode)
@@ -1044,28 +1196,24 @@ struct OfferCodeListRow: View {
             VStack(alignment: .trailing, spacing: 4) {
                 expirationText
 
-                Text(code.createdAt, format: .dateTime.month().day())
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                if let firstSeenAt = code.firstSeenAt {
+                    Text("Seen \(firstSeenAt, format: .dateTime.month().day())")
+                        .font(.caption2)
+                        .foregroundStyle(.purple)
+                } else if let sentAt = code.sentAt {
+                    Text("Sent \(sentAt, format: .dateTime.month().day())")
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+                } else {
+                    Text(code.createdAt, format: .dateTime.month().day())
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
         .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
-    }
-
-    @ViewBuilder
-    private var statusIcon: some View {
-        if code.isRedeemed {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.secondary)
-        } else if code.isExpired {
-            Image(systemName: "xmark.circle.fill")
-                .foregroundStyle(.red)
-        } else {
-            Image(systemName: "circle")
-                .foregroundStyle(.green)
-        }
     }
 
     @ViewBuilder
@@ -1087,6 +1235,30 @@ struct OfferCodeListRow: View {
         } else {
             Text("—")
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct OfferCodeStatusIcon: View {
+    let status: OfferCodeDisplayStatus
+
+    var body: some View {
+        switch status {
+        case .redeemed:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.secondary)
+        case .expired:
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.red)
+        case .seen:
+            Image(systemName: "eye.circle.fill")
+                .foregroundStyle(.purple)
+        case .sent:
+            Image(systemName: "paperplane.circle.fill")
+                .foregroundStyle(.blue)
+        case .available:
+            Image(systemName: "circle")
+                .foregroundStyle(.green)
         }
     }
 }
@@ -1298,15 +1470,21 @@ struct AppContextMenu: View {
 // MARK: - Code Detail View
 
 struct CodeDetailView: View {
+    @Environment(\.modelContext) private var modelContext
     @Bindable var code: OfferCode
     var isPrivacyModeEnabled: Bool = false
     @AppStorage("shareMessageTemplate") private var shareMessageTemplate = "Here's a promo code for {appName}! Redeem it here: {url}"
+    @AppStorage(TrackingSettingsKeys.apiBaseURL) private var trackingAPIBaseURL = ""
+    @AppStorage(TrackingSettingsKeys.isEnabled) private var isTrackingEnabled = false
+    @State private var isPreparingTrackedLink = false
+    @State private var isRefreshingTrackingStatus = false
+    @State private var trackingErrorMessage: String?
 
     private var shareMessage: String {
         ShareMessageHelper.formatMessage(
             template: shareMessageTemplate,
             appName: code.app?.name,
-            url: code.redemptionURL,
+            url: distributionURLString,
             code: code.code
         )
     }
@@ -1316,7 +1494,25 @@ struct CodeDetailView: View {
     }
 
     private var displayURL: String {
-        isPrivacyModeEnabled ? maskedURL(code.redemptionURL) : code.redemptionURL
+        isPrivacyModeEnabled ? maskedURL(distributionURLString) : distributionURLString
+    }
+
+    private var distributionURLString: String {
+        if isTrackingEnabled, let trackedURL = code.trackedURL {
+            return trackedURL
+        }
+        return code.redemptionURL
+    }
+
+    private var canDistribute: Bool {
+        !isTrackingEnabled || code.trackedURL != nil
+    }
+
+    private var sentDate: Binding<Date> {
+        Binding(
+            get: { code.sentAt ?? Date() },
+            set: { code.markAsSent(at: $0) }
+        )
     }
 
     private func maskedCode(_ code: String) -> String {
@@ -1370,12 +1566,21 @@ struct CodeDetailView: View {
                     Spacer()
 
                     Button {
-                        PlatformClipboard.copy(code.redemptionURL)
+                        Task {
+                            if let url = await prepareDistributionURL() {
+                                PlatformClipboard.copy(url.absoluteString)
+                            }
+                        }
                     } label: {
-                        Image(systemName: "doc.on.doc")
+                        if isPreparingTrackedLink {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "doc.on.doc")
+                        }
                     }
                     .help("Copy URL")
-                    .disabled(isPrivacyModeEnabled)
+                    .disabled(isPrivacyModeEnabled || isPreparingTrackedLink)
 
                     Button {
                         if let url = URL(string: code.redemptionURL) {
@@ -1390,14 +1595,24 @@ struct CodeDetailView: View {
                         Image(systemName: "square.and.arrow.up")
                     }
                     .help("Share code")
-                    .disabled(isPrivacyModeEnabled)
+                    .disabled(isPrivacyModeEnabled || !canDistribute)
 
                 }
 
                 // QR Code displayed directly
                 if !isPrivacyModeEnabled {
                     VStack(spacing: 12) {
-                        if let qrCode = QRCodeGenerator.generate(from: code.redemptionURL, size: 150) {
+                        if isTrackingEnabled && !canDistribute {
+                            if isPreparingTrackedLink {
+                                ProgressView("Preparing tracked link…")
+                            } else {
+                                Button("Retry Tracked Link") {
+                                    Task {
+                                        _ = await prepareDistributionURL()
+                                    }
+                                }
+                            }
+                        } else if let qrCode = QRCodeGenerator.generate(from: distributionURLString, size: 150) {
                             qrCode
                                 .interpolation(.none)
                                 .frame(width: 150, height: 150)
@@ -1416,10 +1631,17 @@ struct CodeDetailView: View {
                                     .font(.caption)
                             }
                             .buttonStyle(.bordered)
+                            .disabled(!canDistribute)
                         }
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
+                }
+
+                if let trackingErrorMessage {
+                    Text(trackingErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 }
             }
 
@@ -1430,7 +1652,7 @@ struct CodeDetailView: View {
                         if newValue {
                             code.markAsRedeemed()
                         } else {
-                            code.markAsAvailable()
+                            code.markAsUnredeemed()
                         }
                         if let batch = code.batch {
                             refreshExpirationNotification(for: batch)
@@ -1445,14 +1667,51 @@ struct CodeDetailView: View {
                 }
             }
 
-            Section("Assignment") {
-                TextField("Email or user", text: Binding(
+            Section("Distribution") {
+                Toggle("Sent", isOn: Binding(
+                    get: { code.sentAt != nil },
+                    set: { isSent in
+                        if isSent {
+                            code.markAsSent(at: Date())
+                        } else {
+                            code.markAsUnsent()
+                        }
+                        if let batch = code.batch {
+                            refreshExpirationNotification(for: batch)
+                        }
+                    }
+                ))
+
+                if code.sentAt != nil {
+                    DatePicker(
+                        "Sent on",
+                        selection: sentDate,
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                }
+
+                TextField("Recipient or campaign", text: Binding(
                     get: { code.assignedTo ?? "" },
                     set: { code.assignedTo = $0.isEmpty ? nil : $0 }
                 ))
             }
 
-            Section("Notes") {
+            if code.trackingLinkID != nil {
+                TrackingStatusSection(
+                    firstSeenAt: code.firstSeenAt,
+                    lastSeenAt: code.lastSeenAt,
+                    visitCount: code.trackingVisitCount,
+                    lastSyncedAt: code.trackingLastSyncedAt,
+                    isRefreshing: isRefreshingTrackingStatus,
+                    onRefresh: {
+                        Task {
+                            await refreshTrackingStatus()
+                        }
+                    }
+                )
+            }
+
+            Section("Distribution notes") {
                 TextEditor(text: Binding(
                     get: { code.notes ?? "" },
                     set: { code.notes = $0.isEmpty ? nil : $0 }
@@ -1488,6 +1747,118 @@ struct CodeDetailView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Code Details")
+        .task(id: "\(code.id.uuidString)-\(isTrackingEnabled)-\(trackingAPIBaseURL)") {
+            if isTrackingEnabled {
+                _ = await prepareDistributionURL()
+            }
+            await refreshTrackingStatus()
+        }
+    }
+
+    private var trackingAPIToken: String {
+        let baseURL = code.trackingAPIBaseURL ?? trackingAPIBaseURL
+        return (try? KeychainService.shared.getTrackingAPIToken(forAPIBaseURL: baseURL)) ?? ""
+    }
+
+    private func prepareDistributionURL() async -> URL? {
+        guard !isPreparingTrackedLink else { return nil }
+        isPreparingTrackedLink = true
+        defer { isPreparingTrackedLink = false }
+
+        do {
+            let url = try await DistributionCoordinator.shared.effectiveURL(
+                for: code,
+                trackingEnabled: isTrackingEnabled,
+                apiBaseURL: trackingAPIBaseURL,
+                apiToken: trackingAPIToken,
+                modelContext: modelContext
+            )
+            trackingErrorMessage = nil
+            return url
+        } catch {
+            trackingErrorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    private func refreshTrackingStatus() async {
+        guard code.trackingLinkID != nil, !trackingAPIToken.isEmpty,
+              !isRefreshingTrackingStatus else { return }
+
+        isRefreshingTrackingStatus = true
+        defer { isRefreshingTrackingStatus = false }
+
+        do {
+            try await DistributionCoordinator.shared.refreshStatus(
+                for: code,
+                apiToken: trackingAPIToken,
+                modelContext: modelContext
+            )
+            trackingErrorMessage = nil
+        } catch {
+            trackingErrorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct TrackingStatusSection: View {
+    let firstSeenAt: Date?
+    let lastSeenAt: Date?
+    let visitCount: Int?
+    let lastSyncedAt: Date?
+    let isRefreshing: Bool
+    let onRefresh: () -> Void
+
+    var body: some View {
+        Section("Interaction") {
+            LabeledContent("Status") {
+                if firstSeenAt == nil {
+                    Label("Not seen", systemImage: "eye.slash")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Label("Seen", systemImage: "eye.fill")
+                        .foregroundStyle(.purple)
+                }
+            }
+
+            if let firstSeenAt {
+                LabeledContent("First seen") {
+                    Text(firstSeenAt, format: .dateTime)
+                }
+            }
+
+            if let lastSeenAt {
+                LabeledContent("Last seen") {
+                    Text(lastSeenAt, format: .dateTime)
+                }
+            }
+
+            if let visitCount {
+                LabeledContent("Visits", value: visitCount.formatted())
+            }
+
+            if let lastSyncedAt {
+                LabeledContent("Last refreshed") {
+                    Text(lastSyncedAt, format: .relative(presentation: .named))
+                }
+            }
+
+            Button {
+                onRefresh()
+            } label: {
+                if isRefreshing {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Label("Refresh Status", systemImage: "arrow.clockwise")
+                }
+            }
+            .disabled(isRefreshing)
+
+            Text("Seen means the redirect was requested. Link previews and automated scanners can trigger it.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

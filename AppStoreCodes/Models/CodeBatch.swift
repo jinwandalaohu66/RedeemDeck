@@ -59,7 +59,7 @@ final class CodeBatch {
     }
 
     var availableCodesCount: Int {
-        safeCodes.filter { !$0.isRedeemed && !$0.isExpired }.count
+        safeCodes.filter(\.isAvailable).count
     }
 
     var expiredCodesCount: Int {

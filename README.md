@@ -24,8 +24,10 @@ CodeVault keeps offer codes organised by app and import batch, helps you find th
 - Group codes by app and import batch.
 - Search, filter, sort, rename, and export code batches.
 - Get the next available, unexpired code in one action.
+- Record each code's recipient or campaign, distribution notes, and sent time.
 - Mark codes as available or redeemed and copy a code or redemption URL.
 - Display redemption QR codes and share codes from iPhone or iPad.
+- Optionally create self-hosted tracked redemption links and record aggregate Seen status.
 - Mask sensitive codes with privacy mode.
 - Receive optional notifications when codes are close to expiring.
 - Sync data privately between devices with CloudKit when configured.
@@ -86,6 +88,14 @@ EXAMPLE-CODE,https://apps.apple.com/redeem?id=123456789&code=EXAMPLE-CODE
 Before importing, CodeVault infers whether the file contains app promo codes or offer codes and asks you to confirm the validity period. App promo codes default to four weeks from generation. Offer codes allow you to confirm their App Store Connect expiration date, up to six months from generation. You can correct the expiration later from Edit Import, which updates every code in that batch.
 
 Do not commit real offer codes, App Store Connect private keys, or screenshots containing unmasked codes.
+
+## Optional tracking backend
+
+CodeVault can use a backend you control to create short redemption links and record aggregate Seen status. Tracking is disabled by default. The open-source app does not include a hosted service, API token, encryption key, deployment account, or production domain.
+
+The standalone Cloudflare Worker and its deployment instructions are in [`backend/`](backend/README.md). Configure its HTTPS domain and management token in CodeVault's Tracking settings. The token is stored in Keychain and is never bundled into the app.
+
+A Seen event means that the redirect was requested. Mail scanners and link previews can trigger it, so it does not prove a human interaction or App Store redemption.
 
 ## Testing
 

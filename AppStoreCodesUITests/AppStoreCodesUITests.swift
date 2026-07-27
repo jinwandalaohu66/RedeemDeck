@@ -24,6 +24,7 @@ final class AppStoreCodesUITests: XCTestCase {
 
     @MainActor
     func testRightClickingAnImportOpensRenameSheet() throws {
+        #if os(macOS)
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launch()
@@ -46,6 +47,51 @@ final class AppStoreCodesUITests: XCTestCase {
         app.buttons["Save"].click()
 
         XCTAssertTrue(app.buttons["import-Lifetime"].waitForExistence(timeout: 2))
+        #else
+        throw XCTSkip("Context-menu rename is a macOS-only interaction.")
+        #endif
+    }
+
+    @MainActor
+    func testTrackingSettingsAreReachableAndRequireConfiguration() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--ui-testing",
+            "-trackingAPIBaseURL", "",
+            "-trackInteraction", "NO",
+        ]
+        app.launch()
+        app.activate()
+
+        #if os(iOS)
+        let settingsButton = app.buttons["Settings"]
+        XCTAssertTrue(
+            settingsButton.waitForExistence(timeout: 5),
+            "The main toolbar should expose an accessible Settings button."
+        )
+        XCTAssertTrue(settingsButton.isHittable)
+        settingsButton.tap()
+        #elseif os(macOS)
+        app.typeKey(",", modifierFlags: .command)
+        #endif
+
+        let trackingTab = app.buttons["Tracking"]
+        XCTAssertTrue(
+            trackingTab.waitForExistence(timeout: 5),
+            "Settings should expose the Tracking tab."
+        )
+        trackingTab.tap()
+
+        XCTAssertTrue(app.textFields["API domain"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.secureTextFields["API token"].exists)
+        XCTAssertTrue(app.buttons["Test Connection"].exists)
+
+        let trackingToggle = app.switches["Track interaction"]
+        XCTAssertTrue(trackingToggle.waitForExistence(timeout: 3))
+        XCTAssertFalse(
+            trackingToggle.isEnabled,
+            "Tracking must remain disabled until the API domain and stored token are valid."
+        )
     }
 
     @MainActor
