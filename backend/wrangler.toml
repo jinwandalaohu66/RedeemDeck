@@ -1,0 +1,27 @@
+name = "codevault-tracked-links"
+main = "src/index.ts"
+compatibility_date = "2026-07-27"
+workers_dev = false
+
+# This is deliberately not a real deployment URL. Override it per environment.
+[vars]
+PUBLIC_BASE_URL = "https://links.example.com"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "codevault-tracked-links"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+# Rate limit counters contain only constant route keys or opaque link slugs.
+[[unsafe.bindings]]
+name = "REGISTRATION_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
+[[unsafe.bindings]]
+name = "REDIRECT_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 120, period = 60 }
