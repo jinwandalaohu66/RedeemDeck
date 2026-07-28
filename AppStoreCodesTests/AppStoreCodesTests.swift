@@ -78,7 +78,7 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
-    func backfillsExistingCSVBatchAndCodeExpirationDates() throws {
+    func backfillsExistingCSVBatchAndCodeExpirationDates() async throws {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
             for: AppRecord.self,
@@ -108,15 +108,24 @@ struct AppStoreCodesTests {
         code.batch = batch
         context.insert(batch)
         context.insert(code)
+        try context.save()
+        let importer = CSVImporter(modelContainer: container)
 
-        let updatedCount = try CSVImporter(modelContext: context)
+        let updatedCount = try await importer
             .backfillMissingCSVExpirationDates(calendar: calendar)
 
-        #expect(updatedCount == 1)
-        #expect(batch.expirationDate == expectedExpirationDate)
-        #expect(code.expirationDate == expectedExpirationDate)
+        let updatedBatch = try #require(
+            context.fetch(FetchDescriptor<CodeBatch>()).first
+        )
+        let updatedCode = try #require(
+            context.fetch(FetchDescriptor<OfferCode>()).first
+        )
 
-        let secondUpdatedCount = try CSVImporter(modelContext: context)
+        #expect(updatedCount == 1)
+        #expect(updatedBatch.expirationDate == expectedExpirationDate)
+        #expect(updatedCode.expirationDate == expectedExpirationDate)
+
+        let secondUpdatedCount = try await importer
             .backfillMissingCSVExpirationDates(calendar: calendar)
         #expect(secondUpdatedCount == 0)
     }
@@ -143,7 +152,7 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
-    func importedDocumentDefaultsExpirationFromItsModificationDate() throws {
+    func importedDocumentDefaultsExpirationFromItsModificationDate() async throws {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
             for: AppRecord.self,
@@ -173,7 +182,7 @@ struct AppStoreCodesTests {
         resourceValues.contentModificationDate = issueDate
         try fileURL.setResourceValues(resourceValues)
 
-        _ = try CSVImporter(modelContext: container.mainContext)
+        _ = try await CSVImporter(modelContainer: container)
             .importCodes(from: fileURL)
 
         let batches = try container.mainContext.fetch(FetchDescriptor<CodeBatch>())
@@ -185,7 +194,7 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
-    func importedPromoDocumentDefaultsToFourWeeks() throws {
+    func importedPromoDocumentDefaultsToFourWeeks() async throws {
         let container = try makeInMemoryContainer()
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
@@ -205,9 +214,10 @@ struct AppStoreCodesTests {
         try fileURL.setResourceValues(resourceValues)
         let app = AppRecord(name: "Test App", appStoreId: "123")
         container.mainContext.insert(app)
+        try container.mainContext.save()
 
-        _ = try CSVImporter(modelContext: container.mainContext)
-            .importCodes(from: fileURL, targetApp: app)
+        _ = try await CSVImporter(modelContainer: container)
+            .importCodes(from: fileURL, targetAppStoreId: app.appStoreId)
 
         let batches = try container.mainContext.fetch(FetchDescriptor<CodeBatch>())
         let codes = try container.mainContext.fetch(FetchDescriptor<OfferCode>())
@@ -222,17 +232,18 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
-    func explicitExpirationOverridesTheInferredPromoDefault() throws {
+    func explicitExpirationOverridesTheInferredPromoDefault() async throws {
         let container = try makeInMemoryContainer()
         let app = AppRecord(name: "Test App", appStoreId: "123")
         container.mainContext.insert(app)
+        try container.mainContext.save()
         let confirmedExpirationDate = Date(timeIntervalSince1970: 1_800_000_000)
 
-        _ = try CSVImporter(modelContext: container.mainContext).importCodes(
+        _ = try await CSVImporter(modelContainer: container).importCodes(
             fromCSVString: "Promo Code\nPROMO123",
             batchName: "Confirmed Promo",
             expirationDate: confirmedExpirationDate,
-            targetApp: app
+            targetAppStoreId: app.appStoreId
         )
 
         let batches = try container.mainContext.fetch(FetchDescriptor<CodeBatch>())
@@ -242,11 +253,11 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
-    func apiOfferImportPreservesItsActualExpirationDate() throws {
+    func apiOfferImportPreservesItsActualExpirationDate() async throws {
         let container = try makeInMemoryContainer()
         let apiExpirationDate = Date(timeIntervalSince1970: 1_900_000_000)
 
-        _ = try CSVImporter(modelContext: container.mainContext).importCodes(
+        _ = try await CSVImporter(modelContainer: container).importCodes(
             fromCSVString: "Offer Code,Redemption URL\nOFFER123,https://apps.apple.com/redeem?ctx=offercodes&id=123&code=OFFER123",
             batchName: "API Offer",
             source: .api,
@@ -355,14 +366,14 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
-    func importsBOMHeaderAndQuotedCSVFields() throws {
+    func importsBOMHeaderAndQuotedCSVFields() async throws {
         let container = try makeInMemoryContainer()
         let csv = """
         \u{FEFF}\"Code\",\"Redemption URL\",\"Notes\"
         \"A1\",\"https://apps.apple.com/redeem?ctx=offercodes&id=123&code=A1\",\"contains, comma\"
         """
 
-        let result = try CSVImporter(modelContext: container.mainContext)
+        let result = try await CSVImporter(modelContainer: container)
             .importCodes(fromCSVString: csv, batchName: "Quoted")
 
         let apps = try container.mainContext.fetch(FetchDescriptor<AppRecord>())
@@ -376,10 +387,11 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
-    func URLBearingImportUsesItsEmbeddedAppInsteadOfTheSelectedFallback() throws {
+    func URLBearingImportUsesItsEmbeddedAppInsteadOfTheSelectedFallback() async throws {
         let container = try makeInMemoryContainer()
         let selectedApp = AppRecord(name: "Selected App", appStoreId: "123")
         container.mainContext.insert(selectedApp)
+        try container.mainContext.save()
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("csv")
@@ -387,8 +399,8 @@ struct AppStoreCodesTests {
         try "OFFER123,https://apps.apple.com/redeem?ctx=offercodes&id=999&code=OFFER123"
             .write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let result = try CSVImporter(modelContext: container.mainContext)
-            .importCodes(from: fileURL, targetApp: selectedApp)
+        let result = try await CSVImporter(modelContainer: container)
+            .importCodes(from: fileURL, targetAppStoreId: selectedApp.appStoreId)
 
         let codes = try container.mainContext.fetch(FetchDescriptor<OfferCode>())
         #expect(result.appStoreId == "999")
@@ -397,18 +409,18 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
-    func importsCodeOnlyTextIntoExplicitTargetApp() throws {
+    func importsCodeOnlyTextIntoExplicitTargetApp() async throws {
         let container = try makeInMemoryContainer()
         let app = AppRecord(name: "Test App", appStoreId: "456")
         container.mainContext.insert(app)
         try container.mainContext.save()
         let sixtyFourCharacterCode = String(repeating: "A", count: 64)
 
-        let result = try CSVImporter(modelContext: container.mainContext)
+        let result = try await CSVImporter(modelContainer: container)
             .importCodes(
                 fromCSVString: "SHORT12\r\n\(sixtyFourCharacterCode)\r\n",
                 batchName: "Promo Codes",
-                targetApp: app
+                targetAppStoreId: app.appStoreId
             )
 
         let codes = try container.mainContext.fetch(
@@ -423,11 +435,11 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
-    func codeOnlyTextRequiresATargetApp() throws {
+    func codeOnlyTextRequiresATargetApp() async throws {
         let container = try makeInMemoryContainer()
 
         do {
-            _ = try CSVImporter(modelContext: container.mainContext)
+            _ = try await CSVImporter(modelContainer: container)
                 .importCodes(fromCSVString: "PROMO123", batchName: "Promo")
             Issue.record("Expected a target-app error")
         } catch CSVImportError.targetAppRequired {
@@ -440,17 +452,17 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
-    func deduplicatesStoredAndRepeatedCodesWithoutCreatingAnEmptyBatch() throws {
+    func deduplicatesStoredAndRepeatedCodesWithoutCreatingAnEmptyBatch() async throws {
         let container = try makeInMemoryContainer()
-        let importer = CSVImporter(modelContext: container.mainContext)
+        let importer = CSVImporter(modelContainer: container)
         let url = "https://apps.apple.com/redeem?id=789&code=DUPLICATE1"
         let csv = "DUPLICATE1,\(url)\nDUPLICATE1,\(url)"
 
-        let firstResult = try importer.importCodes(
+        let firstResult = try await importer.importCodes(
             fromCSVString: csv,
             batchName: "First"
         )
-        let secondResult = try importer.importCodes(
+        let secondResult = try await importer.importCodes(
             fromCSVString: csv,
             batchName: "Second"
         )
@@ -467,7 +479,80 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
-    func rejectsMixedAppStoreIDsWithoutInsertingAnything() throws {
+    func serializesConcurrentImportsThroughOneImporter() async throws {
+        let container = try makeInMemoryContainer()
+        let importer = CSVImporter(modelContainer: container)
+        let csv = "RACE1,https://apps.apple.com/redeem?id=789&code=RACE1"
+
+        async let first = importer.importCodes(
+            fromCSVString: csv,
+            batchName: "First"
+        )
+        async let second = importer.importCodes(
+            fromCSVString: csv,
+            batchName: "Second"
+        )
+        let results = try await [first, second]
+
+        let batches = try container.mainContext.fetch(FetchDescriptor<CodeBatch>())
+        let codes = try container.mainContext.fetch(FetchDescriptor<OfferCode>())
+        #expect(results.map(\.importedCount).reduce(0, +) == 1)
+        #expect(results.map(\.skippedDuplicates).reduce(0, +) == 1)
+        #expect(batches.count == 1)
+        #expect(codes.map(\.code) == ["RACE1"])
+    }
+
+    @Test @MainActor
+    func rollsBackFailedImportBeforeReusingLongLivedContext() async throws {
+        let container = try makeInMemoryContainer()
+        let importer = CSVImporter(modelContainer: container)
+        await importer.failBeforeNextSaveForTesting()
+
+        do {
+            _ = try await importer.importCodes(
+                fromCSVString: "ROLLBACK1,https://apps.apple.com/redeem?id=321&code=ROLLBACK1",
+                batchName: "Failed"
+            )
+            Issue.record("Expected a forced pre-save failure")
+        } catch CSVImporterTestError.forcedFailure {
+            // Expected.
+        }
+
+        #expect(try container.mainContext.fetch(FetchDescriptor<AppRecord>()).isEmpty)
+        #expect(try container.mainContext.fetch(FetchDescriptor<CodeBatch>()).isEmpty)
+        #expect(try container.mainContext.fetch(FetchDescriptor<OfferCode>()).isEmpty)
+
+        let result = try await importer.importCodes(
+            fromCSVString: "RECOVERED1,https://apps.apple.com/redeem?id=654&code=RECOVERED1",
+            batchName: "Recovered"
+        )
+        #expect(result.importedCount == 1)
+        #expect(try container.mainContext.fetch(FetchDescriptor<AppRecord>()).map(\.appStoreId) == ["654"])
+        #expect(try container.mainContext.fetch(FetchDescriptor<CodeBatch>()).map(\.name) == ["Recovered"])
+        #expect(try container.mainContext.fetch(FetchDescriptor<OfferCode>()).map(\.code) == ["RECOVERED1"])
+    }
+
+    @Test @MainActor
+    func inspectsCSVFileAsynchronouslyWithoutChangingTheStore() async throws {
+        let container = try makeInMemoryContainer()
+        let importer = CSVImporter(modelContainer: container)
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("csv")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        try "Promo Code\nPROMO123".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let inspection = try await importer.inspect(fileURL)
+
+        #expect(inspection.codeKind == .promo)
+        #expect(inspection.expirationDate > inspection.issueDate)
+        #expect(try container.mainContext.fetch(FetchDescriptor<AppRecord>()).isEmpty)
+        #expect(try container.mainContext.fetch(FetchDescriptor<CodeBatch>()).isEmpty)
+        #expect(try container.mainContext.fetch(FetchDescriptor<OfferCode>()).isEmpty)
+    }
+
+    @Test @MainActor
+    func rejectsMixedAppStoreIDsWithoutInsertingAnything() async throws {
         let container = try makeInMemoryContainer()
         let csv = """
         FIRST1,https://apps.apple.com/redeem?id=111&code=FIRST1
@@ -475,7 +560,7 @@ struct AppStoreCodesTests {
         """
 
         do {
-            _ = try CSVImporter(modelContext: container.mainContext)
+            _ = try await CSVImporter(modelContainer: container)
                 .importCodes(fromCSVString: csv, batchName: "Mixed")
             Issue.record("Expected an app-ID mismatch error")
         } catch CSVImportError.appStoreIdMismatch {
@@ -488,7 +573,7 @@ struct AppStoreCodesTests {
     }
 
     @Test @MainActor
-    func importedCodesPersistAfterReopeningOnDiskStore() throws {
+    func importedCodesPersistAfterReopeningOnDiskStore() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
@@ -506,7 +591,7 @@ struct AppStoreCodesTests {
                 OfferCode.self,
                 configurations: configuration
             )
-            _ = try CSVImporter(modelContext: container.mainContext)
+            _ = try await CSVImporter(modelContainer: container)
                 .importCodes(
                     fromCSVString: "PERSIST1,https://apps.apple.com/redeem?id=999&code=PERSIST1",
                     batchName: "Persistent"

@@ -8,13 +8,13 @@
 import Foundation
 import SwiftData
 
-struct ParsedCode {
+nonisolated struct ParsedCode: Sendable {
     let code: String
     let redemptionURL: String
     let appStoreId: String
 }
 
-private enum CSVRowParser {
+private nonisolated enum CSVRowParser {
     static func parse(_ row: String) -> [String]? {
         var fields: [String] = []
         var field = ""
@@ -50,14 +50,14 @@ private enum CSVRowParser {
     }
 }
 
-enum CSVCodeKind: Hashable {
+nonisolated enum CSVCodeKind: Hashable, Sendable {
     case promo
     case offer
 }
 
 /// Dates inferred from the imported document for the confirmation UI. The
 /// expiration date is a suggestion until the user confirms or edits it.
-struct CSVImportDates {
+nonisolated struct CSVImportDates {
     let issueDate: Date
     let expirationDate: Date
     let codeKind: CSVCodeKind
@@ -145,7 +145,13 @@ struct CSVImportDates {
     }
 }
 
-enum CSVImportError: LocalizedError {
+nonisolated struct CSVImportInspection: Sendable {
+    let issueDate: Date
+    let expirationDate: Date
+    let codeKind: CSVCodeKind
+}
+
+nonisolated enum CSVImportError: LocalizedError, Sendable {
     case fileReadError
     case invalidFormat
     case noValidCodes
@@ -171,18 +177,50 @@ enum CSVImportError: LocalizedError {
     }
 }
 
-struct CSVImportResult {
+nonisolated struct CSVImportResult: Sendable {
     let importedCount: Int
     let skippedDuplicates: Int
     let appStoreId: String
     let batchId: UUID?
+    let requiresMetadataRefresh: Bool
 }
 
-final class CSVImporter {
-    private let modelContext: ModelContext
+actor CSVImporter {
+    nonisolated let modelContainer: ModelContainer
+    private var storedModelContext: ModelContext?
+    #if DEBUG
+    private var shouldFailBeforeNextSave = false
+    #endif
 
-    init(modelContext: ModelContext) {
-        self.modelContext = modelContext
+    init(modelContainer: ModelContainer) {
+        self.modelContainer = modelContainer
+    }
+
+    private var modelContext: ModelContext {
+        if let storedModelContext {
+            return storedModelContext
+        }
+
+        let context = ModelContext(modelContainer)
+        context.autosaveEnabled = false
+        storedModelContext = context
+        return context
+    }
+
+    #if DEBUG
+    func failBeforeNextSaveForTesting() {
+        shouldFailBeforeNextSave = true
+    }
+    #endif
+
+    func inspect(_ url: URL) throws -> CSVImportInspection {
+        let content = try readCSV(from: url)
+        let dates = CSVImportDates(url: url, csvContent: content)
+        return CSVImportInspection(
+            issueDate: dates.issueDate,
+            expirationDate: dates.expirationDate,
+            codeKind: dates.codeKind
+        )
     }
 
     /// Imports codes from a CSV file URL
@@ -195,36 +233,29 @@ final class CSVImporter {
         from url: URL,
         batchName: String? = nil,
         expirationDate: Date? = nil,
-        targetApp: AppRecord? = nil
+        targetAppStoreId: String? = nil
     ) throws -> CSVImportResult {
-        // Security-scoped URLs need balanced access. Regular local URLs can
-        // legitimately return false and should still be read normally.
-        let accessedSecurityScopedResource = url.startAccessingSecurityScopedResource()
-        defer {
-            if accessedSecurityScopedResource {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        // Read file contents
-        let content: String
         do {
-            content = try String(contentsOf: url, encoding: .utf8)
+            let content = try readCSV(from: url)
+            try Task.checkCancellation()
+            let importDates = CSVImportDates(url: url, csvContent: content)
+            let effectiveExpirationDate = expirationDate ?? importDates.expirationDate
+            let effectiveTargetAppStoreId = containsEmbeddedAppStoreID(in: content)
+                ? nil
+                : targetAppStoreId
+
+            return try persistCodes(
+                fromCSVString: content,
+                batchName: batchName ?? url.deletingPathExtension().lastPathComponent,
+                source: .csv,
+                expirationDate: effectiveExpirationDate,
+                targetAppStoreId: effectiveTargetAppStoreId,
+                targetAppName: nil
+            )
         } catch {
-            throw CSVImportError.fileReadError
+            modelContext.rollback()
+            throw error
         }
-
-        let importDates = CSVImportDates(url: url, csvContent: content)
-        let effectiveExpirationDate = expirationDate ?? importDates.expirationDate
-        let effectiveTargetApp = containsEmbeddedAppStoreID(in: content) ? nil : targetApp
-
-        return try importCodes(
-            fromCSVString: content,
-            batchName: batchName ?? url.deletingPathExtension().lastPathComponent,
-            source: .csv,
-            expirationDate: effectiveExpirationDate,
-            targetApp: effectiveTargetApp
-        )
     }
 
     /// Imports codes from a CSV string (used by API imports)
@@ -239,8 +270,33 @@ final class CSVImporter {
         batchName: String,
         source: ImportSource = .csv,
         expirationDate: Date? = nil,
-        targetApp: AppRecord? = nil
+        targetAppStoreId: String? = nil,
+        targetAppName: String? = nil
     ) throws -> CSVImportResult {
+        do {
+            return try persistCodes(
+                fromCSVString: csvString,
+                batchName: batchName,
+                source: source,
+                expirationDate: expirationDate,
+                targetAppStoreId: targetAppStoreId,
+                targetAppName: targetAppName
+            )
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    private func persistCodes(
+        fromCSVString csvString: String,
+        batchName: String,
+        source: ImportSource,
+        expirationDate: Date?,
+        targetAppStoreId: String?,
+        targetAppName: String?
+    ) throws -> CSVImportResult {
+        try Task.checkCancellation()
         let effectiveCodeKind = CSVImportDates.inferCodeKind(from: csvString)
         let effectiveExpirationDate = expirationDate ?? (source == .csv
             ? CSVImportDates.defaultExpirationDate(for: Date(), codeKind: effectiveCodeKind)
@@ -249,7 +305,7 @@ final class CSVImporter {
         // Parse CSV content
         let parsedCodes = try parseCSV(
             csvString,
-            targetAppStoreId: targetApp?.appStoreId
+            targetAppStoreId: targetAppStoreId
         )
 
         guard !parsedCodes.isEmpty else {
@@ -262,7 +318,15 @@ final class CSVImporter {
         }
 
         // Find or create the App
-        let app = targetApp ?? findOrCreateApp(appStoreId: appStoreId)
+        let (app, isNewApp) = try findOrCreateApp(
+            appStoreId: appStoreId,
+            preferredName: targetAppName
+        )
+        let didUpdateAppName = targetAppName.map { app.name != $0 } ?? false
+        if let targetAppName, didUpdateAppName {
+            app.name = targetAppName
+        }
+        let requiresMetadataRefresh = isNewApp || !app.hasMetadata
 
         // Get existing codes for this app to detect duplicates
         var seenCodes = Set((app.codes ?? []).map { $0.code })
@@ -273,6 +337,7 @@ final class CSVImporter {
         var skippedDuplicates = 0
 
         for parsed in parsedCodes {
+            try Task.checkCancellation()
             if seenCodes.contains(parsed.code) {
                 skippedDuplicates += 1
                 continue
@@ -283,11 +348,15 @@ final class CSVImporter {
         }
 
         guard !codesToImport.isEmpty else {
+            if didUpdateAppName {
+                try modelContext.save()
+            }
             return CSVImportResult(
                 importedCount: 0,
                 skippedDuplicates: skippedDuplicates,
                 appStoreId: appStoreId,
-                batchId: nil
+                batchId: nil,
+                requiresMetadataRefresh: requiresMetadataRefresh
             )
         }
 
@@ -300,6 +369,7 @@ final class CSVImporter {
         modelContext.insert(batch)
 
         for parsed in codesToImport {
+            try Task.checkCancellation()
             let offerCode = OfferCode(
                 code: parsed.code,
                 redemptionURL: parsed.redemptionURL,
@@ -310,6 +380,13 @@ final class CSVImporter {
             modelContext.insert(offerCode)
         }
 
+        #if DEBUG
+        if shouldFailBeforeNextSave {
+            shouldFailBeforeNextSave = false
+            throw CSVImporterTestError.forcedFailure
+        }
+        #endif
+
         // Save changes
         try modelContext.save()
 
@@ -317,7 +394,8 @@ final class CSVImporter {
             importedCount: codesToImport.count,
             skippedDuplicates: skippedDuplicates,
             appStoreId: appStoreId,
-            batchId: batch.id
+            batchId: batch.id,
+            requiresMetadataRefresh: requiresMetadataRefresh
         )
     }
 
@@ -326,34 +404,40 @@ final class CSVImporter {
     /// persisted, so the retained batch import date is the best available proxy.
     @discardableResult
     func backfillMissingCSVExpirationDates(calendar: Calendar = .current) throws -> Int {
-        let batches = try modelContext.fetch(FetchDescriptor<CodeBatch>())
-        var updatedCodeCount = 0
-        var hasChanges = false
+        do {
+            let batches = try modelContext.fetch(FetchDescriptor<CodeBatch>())
+            var updatedCodeCount = 0
+            var hasChanges = false
 
-        for batch in batches where batch.source == .csv {
-            let expirationDate = batch.expirationDate
-                ?? CSVImportDates.defaultExpirationDate(
-                    for: batch.importDate,
-                    calendar: calendar
-                )
+            for batch in batches where batch.source == .csv {
+                try Task.checkCancellation()
+                let expirationDate = batch.expirationDate
+                    ?? CSVImportDates.defaultExpirationDate(
+                        for: batch.importDate,
+                        calendar: calendar
+                    )
 
-            if batch.expirationDate == nil {
-                batch.expirationDate = expirationDate
-                hasChanges = true
+                if batch.expirationDate == nil {
+                    batch.expirationDate = expirationDate
+                    hasChanges = true
+                }
+
+                for code in batch.codes ?? [] where code.expirationDate == nil {
+                    code.expirationDate = expirationDate
+                    updatedCodeCount += 1
+                    hasChanges = true
+                }
             }
 
-            for code in batch.codes ?? [] where code.expirationDate == nil {
-                code.expirationDate = expirationDate
-                updatedCodeCount += 1
-                hasChanges = true
+            if hasChanges {
+                try modelContext.save()
             }
-        }
 
-        if hasChanges {
-            try modelContext.save()
+            return updatedCodeCount
+        } catch {
+            modelContext.rollback()
+            throw error
         }
-
-        return updatedCodeCount
     }
 
     /// Parses CSV content into ParsedCode array
@@ -369,6 +453,7 @@ final class CSVImporter {
             .filter { !$0.isEmpty }
 
         for line in lines {
+            try Task.checkCancellation()
             guard let components = CSVRowParser.parse(line), !components.isEmpty else {
                 continue
             }
@@ -483,18 +568,47 @@ final class CSVImporter {
     }
 
     /// Finds an existing AppRecord by App Store ID or creates a new one
-    private func findOrCreateApp(appStoreId: String) -> AppRecord {
+    private func findOrCreateApp(
+        appStoreId: String,
+        preferredName: String?
+    ) throws -> (app: AppRecord, isNew: Bool) {
         let descriptor = FetchDescriptor<AppRecord>(
             predicate: #Predicate { $0.appStoreId == appStoreId }
         )
 
-        if let existingApp = try? modelContext.fetch(descriptor).first {
-            return existingApp
+        if let existingApp = try modelContext.fetch(descriptor).first {
+            return (existingApp, false)
         }
 
         // Create new app with placeholder name
-        let newApp = AppRecord(name: "App \(appStoreId)", appStoreId: appStoreId)
+        let newApp = AppRecord(
+            name: preferredName ?? "App \(appStoreId)",
+            appStoreId: appStoreId
+        )
         modelContext.insert(newApp)
-        return newApp
+        return (newApp, true)
+    }
+
+    private func readCSV(from url: URL) throws -> String {
+        // Security-scoped URLs need balanced access. Regular local URLs can
+        // legitimately return false and should still be read normally.
+        let accessedSecurityScopedResource = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessedSecurityScopedResource {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            return try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            throw CSVImportError.fileReadError
+        }
     }
 }
+
+#if DEBUG
+nonisolated enum CSVImporterTestError: Error {
+    case forcedFailure
+}
+#endif

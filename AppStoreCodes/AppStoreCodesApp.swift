@@ -13,9 +13,7 @@ import UniformTypeIdentifiers
 import AppKit
 #endif
 
-@main
-struct AppStoreCodesApp: App {
-    var sharedModelContainer: ModelContainer = {
+private func makeSharedModelContainer() -> ModelContainer {
         let schema = Schema([
             AppRecord.self,
             CodeBatch.self,
@@ -62,11 +60,22 @@ struct AppStoreCodesApp: App {
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
-    }()
+}
+
+@main
+struct AppStoreCodesApp: App {
+    let sharedModelContainer: ModelContainer
+    let csvImporter: CSVImporter
+
+    init() {
+        let container = makeSharedModelContainer()
+        sharedModelContainer = container
+        csvImporter = CSVImporter(modelContainer: container)
+    }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(csvImporter: csvImporter)
         }
         .modelContainer(sharedModelContainer)
         #if os(macOS)
