@@ -24,6 +24,8 @@ private func refreshExpirationNotification(for batch: CodeBatch) {
 // MARK: - Main Content View
 
 struct ContentView: View {
+    let csvImporter: CSVImporter
+
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \AppRecord.name) private var apps: [AppRecord]
@@ -33,7 +35,8 @@ struct ContentView: View {
     @State private var selectedApp: AppRecord?
     @State private var selectedBatch: CodeBatch?
     @State private var selectedCodes: Set<OfferCode.ID> = []
-    @State private var isImporting = false
+    @State private var isShowingCSVFileImporter = false
+    @State private var isCSVImportBusy = false
     @State private var importResult: CSVImportResult?
     @State private var importError: Error?
     @State private var showingImportAlert = false
@@ -113,14 +116,14 @@ struct ContentView: View {
             }
         }
         .fileImporter(
-            isPresented: $isImporting,
+            isPresented: $isShowingCSVFileImporter,
             allowedContentTypes: [UTType.commaSeparatedText],
             allowsMultipleSelection: false
         ) { result in
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    prepareCSVImport(from: url)
+                    Task { await prepareCSVImport(from: url) }
                 }
             case .failure(let error):
                 importError = error
@@ -181,7 +184,10 @@ struct ContentView: View {
             EditBatchSheet(batch: batch)
         }
         .sheet(isPresented: $showingFetchSheet) {
-            FetchFromAPISheet(modelContext: modelContext) { result in
+            FetchFromAPISheet(
+                modelContext: modelContext,
+                csvImporter: csvImporter
+            ) { result in
                 if let app = apps.first(where: { $0.appStoreId == result.appStoreId }) {
                     selectedApp = app
                 }
@@ -213,7 +219,8 @@ struct ContentView: View {
         }
         // Menu bar command handlers
         .onReceive(NotificationCenter.default.publisher(for: .importCSV)) { _ in
-            isImporting = true
+            guard !isCSVImportBusy else { return }
+            isShowingCSVFileImporter = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .getNextCode)) { _ in
             if let app = selectedApp {
@@ -233,7 +240,7 @@ struct ContentView: View {
             copySelectedURL()
         }
         .task {
-            _ = try? CSVImporter(modelContext: modelContext).backfillMissingCSVExpirationDates()
+            _ = try? await csvImporter.backfillMissingCSVExpirationDates()
             await reconcileExpirationNotifications()
             await refreshTrackedCodeStatuses()
         }
@@ -299,10 +306,11 @@ struct ContentView: View {
         .navigationSplitViewColumnWidth(min: 220, ideal: 280)
         .toolbar {
             ToolbarItemGroup {
-                Button(action: { isImporting = true }) {
+                Button(action: { isShowingCSVFileImporter = true }) {
                     Label("Import CSV", systemImage: "square.and.arrow.down")
                 }
                 .keyboardShortcut("i", modifiers: .command)
+                .disabled(isCSVImportBusy)
 
                 #if os(iOS)
                 Button {
@@ -329,9 +337,19 @@ struct ContentView: View {
                     Text("Import a CSV file or drag & drop to get started.")
                 } actions: {
                     Button("Import CSV") {
-                        isImporting = true
+                        isShowingCSVFileImporter = true
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(isCSVImportBusy)
+                }
+            }
+
+            if isCSVImportBusy {
+                ZStack {
+                    Color.black.opacity(0.12)
+                    ProgressView("Importing codes...")
+                        .padding()
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
         }
@@ -862,7 +880,7 @@ struct ContentView: View {
                       let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
 
                 DispatchQueue.main.async {
-                    prepareCSVImport(from: url)
+                    Task { await prepareCSVImport(from: url) }
                 }
             }
             return true
@@ -874,31 +892,39 @@ struct ContentView: View {
         switch result {
         case .success(let urls):
             guard let url = urls.first else { return }
-            importFromURL(url)
+            Task { await importFromURL(url) }
         case .failure(let error):
             self.importError = error
             self.showingImportAlert = true
         }
     }
 
-    private func importFromURL(_ url: URL, expirationDate: Date? = nil) {
-        let importer = CSVImporter(modelContext: modelContext)
+    private func importFromURL(_ url: URL, expirationDate: Date? = nil) async {
+        guard !isCSVImportBusy else { return }
+        isCSVImportBusy = true
+        defer { isCSVImportBusy = false }
+
+        let targetAppStoreId = selectedApp?.appStoreId
         do {
-            let result = try importer.importCodes(
+            let result = try await csvImporter.importCodes(
                 from: url,
                 expirationDate: expirationDate,
-                targetApp: selectedApp
+                targetAppStoreId: targetAppStoreId
             )
             self.importResult = result
             self.showingImportAlert = true
             scheduleExpirationNotification(for: result)
 
             // Select the newly imported app and auto-fetch metadata
-            if let app = apps.first(where: { $0.appStoreId == result.appStoreId }) {
+            let importedAppStoreId = result.appStoreId
+            let descriptor = FetchDescriptor<AppRecord>(
+                predicate: #Predicate { $0.appStoreId == importedAppStoreId }
+            )
+            if let app = try? modelContext.fetch(descriptor).first {
                 selectedApp = app
 
                 // Auto-fetch metadata if not already fetched
-                if !app.hasMetadata {
+                if result.requiresMetadataRefresh {
                     Task {
                         try? await AppStoreLookupService.shared.updateAppRecord(app)
                     }
@@ -924,17 +950,28 @@ struct ContentView: View {
     }
 
     private func performCSVImport(url: URL) {
-        importFromURL(url, expirationDate: csvImportExpirationDate)
         pendingImportURL = nil
+        Task {
+            await importFromURL(url, expirationDate: csvImportExpirationDate)
+        }
     }
 
-    private func prepareCSVImport(from url: URL) {
-        let dates = CSVImportDates(url: url)
-        csvImportIssueDate = dates.issueDate
-        inferredCSVCodeKind = dates.codeKind
-        csvCodeKind = dates.codeKind
-        csvImportExpirationDate = dates.expirationDate
-        pendingImportURL = url
+    private func prepareCSVImport(from url: URL) async {
+        guard !isCSVImportBusy else { return }
+        isCSVImportBusy = true
+        defer { isCSVImportBusy = false }
+
+        do {
+            let inspection = try await csvImporter.inspect(url)
+            csvImportIssueDate = inspection.issueDate
+            inferredCSVCodeKind = inspection.codeKind
+            csvCodeKind = inspection.codeKind
+            csvImportExpirationDate = inspection.expirationDate
+            pendingImportURL = url
+        } catch {
+            importError = error
+            showingImportAlert = true
+        }
     }
 }
 
@@ -2187,6 +2224,7 @@ struct EditBatchSheet: View {
 struct FetchFromAPISheet: View {
     @Environment(\.dismiss) private var dismiss
     let modelContext: ModelContext
+    let csvImporter: CSVImporter
     var onComplete: ((CSVImportResult) -> Void)?
 
     @State private var api = AppStoreConnectAPI.shared
@@ -2844,8 +2882,37 @@ struct FetchFromAPISheet: View {
                 expirationDate = formatter.date(from: expirationString)
             }
 
-            let result = try importCodesFromCSV(csvContent, appName: app.attributes.name, appId: app.id, batchName: offer.attributes.name, expirationDate: expirationDate)
+            let result = try await csvImporter.importCodes(
+                fromCSVString: csvContent,
+                batchName: offer.attributes.name,
+                source: .api,
+                expirationDate: expirationDate,
+                targetAppStoreId: app.id,
+                targetAppName: app.attributes.name
+            )
             self.importResult = result
+
+            if result.requiresMetadataRefresh {
+                let appId = result.appStoreId
+                let descriptor = FetchDescriptor<AppRecord>(
+                    predicate: #Predicate { $0.appStoreId == appId }
+                )
+                if let appRecord = try? modelContext.fetch(descriptor).first {
+                    Task {
+                        try? await AppStoreLookupService.shared.updateAppRecord(appRecord)
+                    }
+                }
+            }
+
+            if let batchID = result.batchId {
+                let descriptor = FetchDescriptor<CodeBatch>(
+                    predicate: #Predicate { $0.id == batchID }
+                )
+                if let importedBatch = try? modelContext.fetch(descriptor).first {
+                    refreshExpirationNotification(for: importedBatch)
+                }
+            }
+
             currentStep = .complete
         } catch {
             self.error = error.localizedDescription
@@ -2854,49 +2921,15 @@ struct FetchFromAPISheet: View {
         isLoading = false
     }
 
-    private func importCodesFromCSV(_ content: String, appName: String, appId: String, batchName: String, expirationDate: Date? = nil) throws -> CSVImportResult {
-        let descriptor = FetchDescriptor<AppRecord>(predicate: #Predicate { $0.appStoreId == appId })
-        let appRecord: AppRecord
-        let isNewApp: Bool
-        if let existing = try? modelContext.fetch(descriptor).first {
-            appRecord = existing
-            isNewApp = false
-            if appRecord.name != appName { appRecord.name = appName }
-        } else {
-            appRecord = AppRecord(name: appName, appStoreId: appId)
-            modelContext.insert(appRecord)
-            isNewApp = true
-        }
-
-        let result = try CSVImporter(modelContext: modelContext).importCodes(
-            fromCSVString: content,
-            batchName: batchName,
-            source: .api,
-            expirationDate: expirationDate,
-            targetApp: appRecord
-        )
-
-        if let batchID = result.batchId {
-            let batchDescriptor = FetchDescriptor<CodeBatch>(
-                predicate: #Predicate { $0.id == batchID }
-            )
-            if let batch = try? modelContext.fetch(batchDescriptor).first {
-                refreshExpirationNotification(for: batch)
-            }
-        }
-
-        // Auto-fetch metadata for new apps
-        if isNewApp || !appRecord.hasMetadata {
-            Task {
-                try? await AppStoreLookupService.shared.updateAppRecord(appRecord)
-            }
-        }
-
-        return result
-    }
 }
 
 #Preview {
-    ContentView()
-        .modelContainer(for: [AppRecord.self, CodeBatch.self, OfferCode.self], inMemory: true)
+    let container = try! ModelContainer(
+        for: AppRecord.self,
+        CodeBatch.self,
+        OfferCode.self,
+        configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+    )
+    ContentView(csvImporter: CSVImporter(modelContainer: container))
+        .modelContainer(container)
 }

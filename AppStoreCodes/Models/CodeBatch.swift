@@ -8,7 +8,7 @@
 import Foundation
 import SwiftData
 
-enum ImportSource: String, Codable {
+nonisolated enum ImportSource: String, Codable, Sendable {
     case csv
     case api
 }
