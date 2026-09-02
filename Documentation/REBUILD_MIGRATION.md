@@ -18,7 +18,7 @@ Navigation no longer exposes import batches. Categories are selected from the ca
 
 The former App → category → raw code list and retrieval Sheet were replaced, not retained. Tapping an App now presents one native Get Codes Alert. The user enters a quantity and chooses a code type only when the App has more than one. Confirmation pushes exactly one canonical result page; there is no form page or second presentation jump.
 
-`CodeVaultRepository.reserveCodes` prepares the requested quantity in one SwiftData transaction and selects the earliest-expiring available codes first. An insufficient request changes nothing. The selection is represented by an immutable `PreparedCodeSelection`; SwiftData models never leave the model actor.
+`RedeemDeckRepository.reserveCodes` prepares the requested quantity in one SwiftData transaction and selects the earliest-expiring available codes first. An insufficient request changes nothing. The selection is represented by an immutable `PreparedCodeSelection`; SwiftData models never leave the model actor.
 
 Copy, completed system share, and successful photo save mark only pending codes as Sent and present the shared Undo action. Undo restores only codes changed by that action to Pending. The redundant result-toolbar Share action was removed; individual-code sharing remains in Code Details. Status remains editable from the secondary code browser and detail menu.
 
@@ -28,7 +28,7 @@ Raw-code management is deliberately separate from retrieval. Manage Codes, the c
 
 ## Four-state lifecycle
 
-The active lifecycle is Available → Pending → Sent, with Expired computed from the expiration date and shown in preference to the delivery state. Preparing a retrieval creates Pending inventory; a successful output action creates Sent inventory. Sent records delivery from CodeVault, not confirmed App Store redemption.
+The active lifecycle is Available → Pending → Sent, with Expired computed from the expiration date and shown in preference to the delivery state. Preparing a retrieval creates Pending inventory; a successful output action creates Sent inventory. Sent records delivery from RedeemDeck, not confirmed App Store redemption.
 
 The former Redeemed and Revoked states are retired. Startup migration maps legacy redeemed records to Sent and legacy revoked records to Archive, then clears the old flags. Backup restore applies the same normalization. The old properties remain on the model only until a versioned SwiftData migration can remove them safely.
 
@@ -59,6 +59,16 @@ Git history is the backup for deleted production implementations; replaced sourc
 ## Storage and sync
 
 The canonical configuration is a local SwiftData store. CloudKit is intentionally absent. Cross-device transfer uses explicit complete-backup export and merge restore. Deleting the app deletes its database unless the user exported a backup.
+
+## Product rename and backup compatibility
+
+The independent product is named RedeemDeck. The Xcode project, targets, modules, source groups, tests, repository types, migration service, backup archive, exported filenames, notification identifiers, and user-facing copy use that name.
+
+Pre-rename backups remain supported through one import-only Uniform Type Identifier: `app.pythonide.codevault.backup`, with the `.codevaultbackup` extension. RedeemDeck exports only `app.pythonide.redeemdeck.backup` files with the `.redeemdeckbackup` extension. The Codable payload remains schema-versioned, so renaming Swift types does not change archive keys.
+
+Owner: `RedeemDeckBackupDocument`, `BackupCodec`, and the backup restore tests.
+
+Removal gate: remove the upstream import type only after the documented support window no longer includes backups created before the product rename and a migration release has instructed users to re-export them.
 
 ## Security boundary
 
