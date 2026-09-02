@@ -13,13 +13,20 @@ final class OfferCode {
     var id: UUID = UUID()
     var code: String = ""
     var redemptionURL: String = ""
-    var isRedeemed: Bool = false
-    var redeemedDate: Date?
     var sentAt: Date?
     var assignedTo: String?
     var notes: String?
     var createdAt: Date = Date()
     var expirationDate: Date?
+    var reservedAt: Date?
+    var retrievalID: UUID?
+    var archivedAt: Date?
+
+    // Stored only so databases and backups from earlier releases remain readable.
+    var isRedeemed: Bool = false
+    var redeemedDate: Date?
+    var redemptionCount: Int = 0
+    var revokedAt: Date?
     var trackingLinkID: String?
     var trackedURL: String?
     var trackingAPIBaseURL: String?
@@ -32,6 +39,9 @@ final class OfferCode {
     var app: AppRecord?
     var batch: CodeBatch?
 
+    @Relationship(deleteRule: .cascade, inverse: \DistributionRecord.code)
+    var distributions: [DistributionRecord]?
+
     init(code: String, redemptionURL: String, expirationDate: Date? = nil) {
         self.id = UUID()
         self.code = code
@@ -41,38 +51,30 @@ final class OfferCode {
         self.expirationDate = expirationDate
     }
 
-    /// Check if the code has expired
     var isExpired: Bool {
         guard let expirationDate = expirationDate else { return false }
         return Date() > expirationDate
     }
 
-    /// Days until expiration (negative if expired)
-    var daysUntilExpiration: Int? {
-        guard let expirationDate = expirationDate else { return nil }
-        return Calendar.current.dateComponents([.day], from: Date(), to: expirationDate).day
-    }
-
-    /// A code is available only until it has been sent, redeemed, or expired.
     var isAvailable: Bool {
-        !isRedeemed && sentAt == nil && !isExpired
+        archivedAt == nil
+            && revokedAt == nil
+            && !isRedeemed
+            && !isExpired
+            && sentAt == nil
+            && reservedAt == nil
     }
 
-    /// A redirect request is informational and does not change availability.
-    var isSeen: Bool {
-        firstSeenAt != nil || (trackingVisitCount ?? 0) > 0
-    }
-
-    /// The presentation precedence used by code lists and details.
-    var displayStatus: OfferCodeDisplayStatus {
-        if isRedeemed { return .redeemed }
+    var lifecycleStatus: CodeLifecycleStatus {
         if isExpired { return .expired }
-        if isSeen { return .seen }
-        if sentAt != nil { return .sent }
+        if sentAt != nil || isRedeemed || revokedAt != nil { return .sent }
+        if reservedAt != nil { return .pending }
         return .available
     }
 
-    // MARK: - Actions
+    var isArchived: Bool {
+        archivedAt != nil
+    }
 
     func markAsSent(
         at sentAt: Date = Date(),
@@ -86,36 +88,54 @@ final class OfferCode {
         if let notes {
             self.notes = notes
         }
-    }
-
-    func markAsRedeemed(assignedTo: String? = nil) {
-        self.isRedeemed = true
-        self.redeemedDate = Date()
-        // Only update assignedTo if a new value is explicitly provided
-        if let newAssignee = assignedTo {
-            self.assignedTo = newAssignee
-        }
-    }
-
-    func markAsUnsent() {
-        self.sentAt = nil
-    }
-
-    func markAsUnredeemed() {
-        self.isRedeemed = false
-        self.redeemedDate = nil
+        reservedAt = nil
     }
 
     func markAsAvailable() {
-        markAsUnredeemed()
-        self.sentAt = nil
+        sentAt = nil
+        reservedAt = nil
+        retrievalID = nil
+        isRedeemed = false
+        redeemedDate = nil
+        redemptionCount = 0
+        revokedAt = nil
     }
-}
 
-enum OfferCodeDisplayStatus: String, CaseIterable, Sendable {
-    case redeemed
-    case expired
-    case seen
-    case sent
-    case available
+    func reserve(for retrievalID: UUID, at date: Date = Date()) {
+        guard isAvailable else { return }
+        reservedAt = date
+        self.retrievalID = retrievalID
+    }
+
+    func restoreToPending(at date: Date = Date()) {
+        guard !isExpired, archivedAt == nil, retrievalID != nil else { return }
+        sentAt = nil
+        reservedAt = date
+        isRedeemed = false
+        redeemedDate = nil
+        redemptionCount = 0
+        revokedAt = nil
+    }
+
+    func releasePendingReservation() {
+        guard sentAt == nil, reservedAt != nil else { return }
+        reservedAt = nil
+        retrievalID = nil
+    }
+
+    func normalizeRetiredLifecycle() {
+        if isRedeemed || redeemedDate != nil || redemptionCount > 0 {
+            sentAt = sentAt ?? redeemedDate ?? createdAt
+            reservedAt = nil
+        }
+        if let revokedAt {
+            archivedAt = archivedAt ?? revokedAt
+            reservedAt = nil
+            retrievalID = nil
+        }
+        isRedeemed = false
+        redeemedDate = nil
+        redemptionCount = 0
+        revokedAt = nil
+    }
 }

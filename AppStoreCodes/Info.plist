@@ -4,12 +4,9 @@
 <dict>
 	<key>CFBundleDisplayName</key>
 	<string>CodeVault</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save redemption posters to your photo library.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>remote-notification</string>
-		<string>fetch</string>
-	</array>
 </dict>
 </plist>

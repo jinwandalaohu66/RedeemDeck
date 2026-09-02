@@ -1,197 +1,98 @@
-//
-//  AppStoreLookupService.swift
-//  AppStoreCodes
-//
-//  Created by Matteo Comisso on 08/12/2025.
-//
-
 import Foundation
 
-// MARK: - iTunes Lookup Response Models
-
-struct iTunesLookupResponse: Decodable {
-    let resultCount: Int
-    let results: [iTunesAppResult]
-}
-
-struct iTunesAppResult: Decodable {
-    let trackId: Int
-    let trackName: String
-    let bundleId: String
-    let artworkUrl60: String?
-    let artworkUrl100: String?
-    let artworkUrl512: String?
-    let trackViewUrl: String?
-    let sellerName: String?
-    let description: String?
-    let version: String?
-    let releaseDate: String?
-    let currentVersionReleaseDate: String?
-    let primaryGenreName: String?
-    let price: Double?
-    let currency: String?
-    let formattedPrice: String?
-    let averageUserRating: Double?
-    let userRatingCount: Int?
-    let fileSizeBytes: String?
-    let minimumOsVersion: String?
-    let supportedDevices: [String]?
-    let screenshotUrls: [String]?
-    let ipadScreenshotUrls: [String]?
-    let releaseNotes: String?
-}
-
-// MARK: - App Metadata
-
-struct AppMetadata: Sendable {
-    let appStoreId: String
+nonisolated struct AppStoreMetadata: Sendable {
     let name: String
-    let bundleId: String
-    let iconURL: String?
+    let bundleID: String
+    let artworkURL: String?
     let appStoreURL: String?
-    let developerName: String?
-    let description: String?
-    let version: String?
-    let releaseDate: Date?
-    let primaryGenre: String?
-    let price: String?
-    let currency: String?
 }
 
-// MARK: - Lookup Errors
-
-enum AppStoreLookupError: LocalizedError {
-    case invalidAppId
-    case networkError(Error)
+nonisolated enum AppStoreLookupError: LocalizedError, Sendable {
+    case invalidAppID
     case appNotFound
+    case connectionFailed
     case invalidResponse
 
     var errorDescription: String? {
         switch self {
-        case .invalidAppId:
-            return "Invalid App Store ID"
-        case .networkError(let error):
-            return "Network error: \(error.localizedDescription)"
+        case .invalidAppID:
+            String(localized: "Enter a valid numeric App Store ID.")
         case .appNotFound:
-            return "App not found on the App Store"
+            String(localized: "No app was found for this App Store ID.")
+        case .connectionFailed:
+            String(localized: "The App Store could not be reached. Check your connection and try again.")
         case .invalidResponse:
-            return "Invalid response from App Store"
+            String(localized: "The App Store returned data that could not be read.")
         }
     }
 }
 
-// MARK: - App Store Lookup Service
-
-final class AppStoreLookupService: Sendable {
+actor AppStoreLookupService {
     static let shared = AppStoreLookupService()
 
     private let session: URLSession
 
     private init() {
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 15
-        self.session = URLSession(configuration: config)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 15
+        session = URLSession(configuration: configuration)
     }
 
-    /// Lookup app metadata by App Store ID
-    /// - Parameter appStoreId: The numeric App Store ID (e.g., "1547173908")
-    /// - Returns: App metadata
-    func lookupApp(byId appStoreId: String) async throws -> AppMetadata {
-        // Validate app ID is numeric
-        guard Int(appStoreId) != nil else {
-            throw AppStoreLookupError.invalidAppId
+    func lookupApp(byID rawID: String) async throws -> AppStoreMetadata {
+        let appID = rawID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !appID.isEmpty, appID.allSatisfy(\.isNumber) else {
+            throw AppStoreLookupError.invalidAppID
+        }
+        var components = URLComponents(string: "https://itunes.apple.com/lookup")
+        components?.queryItems = [URLQueryItem(name: "id", value: appID)]
+        guard let url = components?.url else {
+            throw AppStoreLookupError.invalidAppID
         }
 
-        // iTunes Lookup API
-        let urlString = "https://itunes.apple.com/lookup?id=\(appStoreId)"
-        guard let url = URL(string: urlString) else {
-            throw AppStoreLookupError.invalidAppId
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(from: url)
+        } catch {
+            throw AppStoreLookupError.connectionFailed
         }
-
-        let (data, response) = try await session.data(from: url)
-
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
             throw AppStoreLookupError.invalidResponse
         }
 
-        let decoder = JSONDecoder()
-        let lookupResponse = try decoder.decode(iTunesLookupResponse.self, from: data)
-
-        guard let result = lookupResponse.results.first else {
+        let payload: LookupResponse
+        do {
+            payload = try JSONDecoder().decode(LookupResponse.self, from: data)
+        } catch {
+            throw AppStoreLookupError.invalidResponse
+        }
+        guard let result = payload.results.first else {
             throw AppStoreLookupError.appNotFound
         }
-
-        // Parse release date
-        var releaseDate: Date? = nil
-        if let dateString = result.releaseDate {
-            let formatter = ISO8601DateFormatter()
-            releaseDate = formatter.date(from: dateString)
-        }
-
-        // Format price
-        var priceString: String? = nil
-        if let price = result.price {
-            if price == 0 {
-                priceString = "Free"
-            } else {
-                priceString = result.formattedPrice ?? String(format: "%.2f", price)
-            }
-        }
-
-        return AppMetadata(
-            appStoreId: appStoreId,
+        return AppStoreMetadata(
             name: result.trackName,
-            bundleId: result.bundleId,
-            iconURL: result.artworkUrl512 ?? result.artworkUrl100 ?? result.artworkUrl60,
-            appStoreURL: result.trackViewUrl,
-            developerName: result.sellerName,
-            description: result.description,
-            version: result.version,
-            releaseDate: releaseDate,
-            primaryGenre: result.primaryGenreName,
-            price: priceString,
-            currency: result.currency
+            bundleID: result.bundleID,
+            artworkURL: result.artworkURL,
+            appStoreURL: result.trackViewURL
         )
     }
+}
 
-    /// Lookup multiple apps by their IDs
-    /// - Parameter appStoreIds: Array of App Store IDs
-    /// - Returns: Dictionary of app ID to metadata (nil if not found)
-    func lookupApps(byIds appStoreIds: [String]) async -> [String: AppMetadata?] {
-        await withTaskGroup(of: (String, AppMetadata?).self) { group in
-            for appId in appStoreIds {
-                group.addTask {
-                    let metadata = try? await self.lookupApp(byId: appId)
-                    return (appId, metadata)
-                }
-            }
+private nonisolated struct LookupResponse: Decodable {
+    let results: [LookupResult]
+}
 
-            var results: [String: AppMetadata?] = [:]
-            for await (appId, metadata) in group {
-                results[appId] = metadata
-            }
-            return results
-        }
-    }
+private nonisolated struct LookupResult: Decodable {
+    let trackName: String
+    let bundleID: String
+    let artworkURL: String?
+    let trackViewURL: String?
 
-    /// Update an AppRecord with metadata from the App Store
-    /// - Parameter app: The AppRecord to update
-    @MainActor
-    func updateAppRecord(_ app: AppRecord) async throws {
-        let metadata = try await lookupApp(byId: app.appStoreId)
-
-        app.name = metadata.name
-        app.bundleId = metadata.bundleId
-        app.iconURL = metadata.iconURL
-        app.appStoreURL = metadata.appStoreURL
-        app.developerName = metadata.developerName
-        app.appDescription = metadata.description
-        app.version = metadata.version
-        app.releaseDate = metadata.releaseDate
-        app.primaryGenre = metadata.primaryGenre
-        app.price = metadata.price
-        app.currency = metadata.currency
-        app.metadataLastUpdated = Date()
+    enum CodingKeys: String, CodingKey {
+        case trackName
+        case bundleID = "bundleId"
+        case artworkURL = "artworkUrl100"
+        case trackViewURL = "trackViewUrl"
     }
 }

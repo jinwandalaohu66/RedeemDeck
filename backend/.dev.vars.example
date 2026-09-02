@@ -1,4 +1,0 @@
-# Synthetic local-only values. Copy this file to .dev.vars and replace both.
-MANAGEMENT_API_TOKEN="replace-with-a-long-random-token"
-# Generate exactly 32 random bytes and encode them as standard base64.
-DESTINATION_ENCRYPTION_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="

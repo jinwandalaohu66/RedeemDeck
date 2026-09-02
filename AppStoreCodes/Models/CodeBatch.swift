@@ -21,17 +21,43 @@ final class CodeBatch {
     var sourceRawValue: String = ImportSource.csv.rawValue
     var notes: String?
     var expirationDate: Date?
+    var codeKindRawValue: String = CodeKind.unknown.rawValue
+    var environmentRawValue: String = CodeEnvironment.production.rawValue
+    var platformRawValue: String = AppPlatform.iOS.rawValue
+    var appVersion: String?
+    var productID: String?
+    var offerReferenceName: String?
+    // Retained only when reading and writing backups from earlier releases.
+    var redemptionLimit: Int?
+    var archivedAt: Date?
 
     var app: AppRecord?
+    var category: CodeCategory?
+    // Persisted compatibility relationship for older backups and stores.
+    var campaign: Campaign?
 
-    // Relationship must be optional for CloudKit
+    // Optional relationship preserves compatibility with the existing store schema.
     @Relationship(deleteRule: .cascade, inverse: \OfferCode.batch)
     var codes: [OfferCode]?
 
-    /// Computed property to get/set the source enum
     var source: ImportSource {
         get { ImportSource(rawValue: sourceRawValue) ?? .csv }
         set { sourceRawValue = newValue.rawValue }
+    }
+
+    var codeKind: CodeKind {
+        get { CodeKind(rawValue: codeKindRawValue) ?? .unknown }
+        set { codeKindRawValue = newValue.rawValue }
+    }
+
+    var environment: CodeEnvironment {
+        get { CodeEnvironment(rawValue: environmentRawValue) ?? .production }
+        set { environmentRawValue = newValue.rawValue }
+    }
+
+    var platform: AppPlatform {
+        get { AppPlatform(rawValue: platformRawValue) ?? .iOS }
+        set { platformRawValue = newValue.rawValue }
     }
 
     init(name: String, source: ImportSource, notes: String? = nil, expirationDate: Date? = nil) {
@@ -43,39 +69,8 @@ final class CodeBatch {
         self.expirationDate = expirationDate
     }
 
-    // MARK: - Computed Properties
-
-    /// Safe accessor for codes
-    private var safeCodes: [OfferCode] {
-        codes ?? []
-    }
-
-    var totalCodesCount: Int {
-        safeCodes.count
-    }
-
-    var redeemedCodesCount: Int {
-        safeCodes.filter { $0.isRedeemed }.count
-    }
-
-    var availableCodesCount: Int {
-        safeCodes.filter(\.isAvailable).count
-    }
-
-    var expiredCodesCount: Int {
-        safeCodes.filter { $0.isExpired && !$0.isRedeemed }.count
-    }
-
-    /// Check if this batch has expired
-    var isExpired: Bool {
-        guard let expirationDate = expirationDate else { return false }
-        return Date() > expirationDate
-    }
-
-    /// Days until expiration
-    var daysUntilExpiration: Int? {
-        guard let expirationDate = expirationDate else { return nil }
-        return Calendar.current.dateComponents([.day], from: Date(), to: expirationDate).day
+    var isArchived: Bool {
+        archivedAt != nil
     }
 
     func updateExpirationDate(_ expirationDate: Date?) {

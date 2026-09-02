@@ -1,436 +1,117 @@
-//
-//  AppStoreCodesApp.swift
-//  AppStoreCodes
-//
-//  Created by Matteo Comisso on 08/12/2025.
-//
-
-import SwiftUI
 import SwiftData
-import UniformTypeIdentifiers
-
-#if os(macOS)
-import AppKit
-#endif
+import SwiftUI
 
 private func makeSharedModelContainer() -> ModelContainer {
-        let schema = Schema([
-            AppRecord.self,
-            CodeBatch.self,
-            OfferCode.self,
-        ])
+    let schema = Schema([
+        AppRecord.self,
+        CodeCategory.self,
+        CodeBatch.self,
+        OfferCode.self,
+        Campaign.self,
+        Recipient.self,
+        DistributionRecord.self,
+        ActivityEvent.self,
+        MessageTemplate.self,
+    ])
+    let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    #if DEBUG
+    let isRunningUITests = ProcessInfo.processInfo.arguments.contains("--ui-testing")
+    #else
+    let isRunningUITests = false
+    #endif
+    let configuration = ModelConfiguration(
+        schema: schema,
+        isStoredInMemoryOnly: isRunningTests || isRunningUITests
+    )
 
-        let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    do {
+        let container = try ModelContainer(for: schema, configurations: [configuration])
         #if DEBUG
-        let isRunningUITests = ProcessInfo.processInfo.arguments.contains("--ui-testing")
-        #else
-        let isRunningUITests = false
+        if isRunningUITests {
+            try seedUITestData(
+                in: container,
+                includesPosterDeck: ProcessInfo.processInfo.arguments.contains(
+                    "--ui-testing-poster-deck"
+                )
+            )
+        }
         #endif
-        let modelConfiguration: ModelConfiguration
-
-        if isRunningTests || isRunningUITests {
-            modelConfiguration = ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true
-            )
-        } else {
-            // Configure production data for iCloud sync.
-            modelConfiguration = ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: false,
-                cloudKitDatabase: .private("iCloud.com.mcsoftware.AppStoreCodes")
-            )
-        }
-
-        do {
-            let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
-
-            #if DEBUG
-            if isRunningUITests {
-                let app = AppRecord(name: "UI Test App", appStoreId: "123456789")
-                let batch = CodeBatch(name: "Original Filename", source: .csv)
-                batch.app = app
-                container.mainContext.insert(app)
-                container.mainContext.insert(batch)
-                try container.mainContext.save()
-            }
-            #endif
-
-            return container
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
+        return container
+    } catch {
+        fatalError("Could not create local model container: \(error)")
+    }
 }
+
+#if DEBUG
+@MainActor
+private func seedUITestData(
+    in container: ModelContainer,
+    includesPosterDeck: Bool
+) throws {
+    let app = AppRecord(name: "UI Test App", appStoreId: "123456789")
+    let category = CodeCategory(
+        name: "Launch Offer",
+        productName: "UI Test Product",
+        app: app
+    )
+    let batch = CodeBatch(name: "Launch Codes", source: .csv)
+    batch.app = app
+    batch.category = category
+    batch.codeKind = .appPromo
+    let code = OfferCode(
+        code: "TESTCODE123",
+        redemptionURL: "https://apps.apple.com/redeem?id=123456789&code=TESTCODE123"
+    )
+    code.app = app
+    code.batch = batch
+    container.mainContext.insert(app)
+    container.mainContext.insert(category)
+    container.mainContext.insert(batch)
+    container.mainContext.insert(code)
+    if includesPosterDeck {
+        for index in 1...2 {
+            let extraCode = OfferCode(
+                code: "TESTCODE12\(index)",
+                redemptionURL: "https://apps.apple.com/redeem?id=123456789&code=TESTCODE12\(index)"
+            )
+            extraCode.app = app
+            extraCode.batch = batch
+            container.mainContext.insert(extraCode)
+        }
+    }
+    try container.mainContext.save()
+}
+#endif
 
 @main
 struct AppStoreCodesApp: App {
-    let sharedModelContainer: ModelContainer
-    let csvImporter: CSVImporter
+    private let sharedModelContainer: ModelContainer
+    private let csvImporter: CSVImporter
+    private let repository: CodeVaultRepository
+    private let migrationService: CodeVaultMigrationService
+    private let dashboardRepository: DashboardRepository
+    private let backupRepository: BackupRepository
 
     init() {
         let container = makeSharedModelContainer()
         sharedModelContainer = container
         csvImporter = CSVImporter(modelContainer: container)
+        repository = CodeVaultRepository(modelContainer: container)
+        migrationService = CodeVaultMigrationService(modelContainer: container)
+        dashboardRepository = DashboardRepository(modelContainer: container)
+        backupRepository = BackupRepository(modelContainer: container)
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView(csvImporter: csvImporter)
+            ContentView(
+                csvImporter: csvImporter,
+                repository: repository,
+                migrationService: migrationService,
+                dashboardRepository: dashboardRepository,
+                backupRepository: backupRepository
+            )
         }
         .modelContainer(sharedModelContainer)
-        #if os(macOS)
-        .commands {
-            CommandGroup(replacing: .newItem) {
-                Button("Import CSV...") {
-                    NotificationCenter.default.post(name: .importCSV, object: nil)
-                }
-                .keyboardShortcut("i", modifiers: .command)
-            }
-
-            CommandMenu("Codes") {
-                Button("Get Next Available Code") {
-                    NotificationCenter.default.post(name: .getNextCode, object: nil)
-                }
-                .keyboardShortcut("g", modifiers: .command)
-
-                Divider()
-
-                Button("Mark Selected as Redeemed") {
-                    NotificationCenter.default.post(name: .markRedeemed, object: nil)
-                }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
-
-                Button("Mark Selected as Available") {
-                    NotificationCenter.default.post(name: .markAvailable, object: nil)
-                }
-                .keyboardShortcut("a", modifiers: [.command, .shift])
-
-                Divider()
-
-                Button("Copy Selected Code") {
-                    NotificationCenter.default.post(name: .copyCode, object: nil)
-                }
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-
-                Button("Copy Redemption URL") {
-                    NotificationCenter.default.post(name: .copyURL, object: nil)
-                }
-                .keyboardShortcut("u", modifiers: [.command, .shift])
-            }
-        }
-        #endif
-
-        #if os(macOS)
-        Settings {
-            SettingsView()
-        }
-        .modelContainer(sharedModelContainer)
-        #endif
-    }
-}
-
-// MARK: - Notification Names
-
-extension Notification.Name {
-    static let importCSV = Notification.Name("importCSV")
-    static let getNextCode = Notification.Name("getNextCode")
-    static let markRedeemed = Notification.Name("markRedeemed")
-    static let markAvailable = Notification.Name("markAvailable")
-    static let copyCode = Notification.Name("copyCode")
-    static let copyURL = Notification.Name("copyURL")
-}
-
-// MARK: - Settings View
-
-struct SettingsView: View {
-    var body: some View {
-        TabView {
-            GeneralSettingsView()
-                .tabItem {
-                    Label("General", systemImage: "gear")
-                }
-
-            TrackingSettingsView()
-                .tabItem {
-                    Label("Tracking", systemImage: "eye")
-                }
-
-            // TODO: Re-enable when App Store Connect API import is ready
-            // APISettingsView()
-            //     .tabItem {
-            //         Label("App Store Connect", systemImage: "key")
-            //     }
-        }
-        #if os(macOS)
-        .frame(width: 500, height: 380)
-        #endif
-    }
-}
-
-struct GeneralSettingsView: View {
-    @Environment(\.modelContext) private var modelContext
-    @AppStorage("autoMarkRedeemed") private var autoMarkRedeemed = false
-    @AppStorage("copyURLInsteadOfCode") private var copyURLInsteadOfCode = false
-    @AppStorage("shareMessageTemplate") private var shareMessageTemplate = "Here's a promo code for {appName}! Redeem it here: {url}"
-    @AppStorage("expirationAlertsEnabled") private var expirationAlertsEnabled = false
-    @State private var notificationPermissionGranted = false
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle("Auto-mark as redeemed when copying", isOn: $autoMarkRedeemed)
-                Toggle("Copy redemption URL instead of code", isOn: $copyURLInsteadOfCode)
-            }
-
-            Section("Notifications") {
-                Toggle("Alert when codes are expiring", isOn: $expirationAlertsEnabled)
-                    .onChange(of: expirationAlertsEnabled) { _, newValue in
-                        if newValue {
-                            Task {
-                                notificationPermissionGranted = await ExpirationNotificationService.shared.requestAuthorization()
-                                if !notificationPermissionGranted {
-                                    expirationAlertsEnabled = false
-                                    return
-                                }
-                                guard expirationAlertsEnabled else { return }
-                                await reconcileExpirationNotifications()
-                            }
-                        } else {
-                            Task {
-                                await ExpirationNotificationService.shared.cancelAll()
-                            }
-                        }
-                    }
-
-                if expirationAlertsEnabled {
-                    Text("You'll be notified when codes are about to expire.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Share Message") {
-                TextEditor(text: $shareMessageTemplate)
-                    .frame(minHeight: 60)
-                    #if os(macOS)
-                    .font(.body)
-                    #endif
-
-                Text("Available placeholders: {appName}, {url}, {code}")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-    }
-
-    private func reconcileExpirationNotifications() async {
-        guard let batches = try? modelContext.fetch(FetchDescriptor<CodeBatch>()) else {
-            return
-        }
-        let snapshots = batches.compactMap(ExpirationNotificationSnapshot.init(batch:))
-        await ExpirationNotificationService.shared.reconcile(snapshots)
-    }
-}
-
-struct APISettingsView: View {
-    @AppStorage("apiKeyId") private var apiKeyId = ""
-    @State private var issuerId: String = ""
-    @State private var apiKeyFile: String = "No file selected"
-    @State private var isValidating = false
-    @State private var validationResult: ValidationResult?
-    @State private var hasKey = false
-    @State private var showingFilePicker = false
-
-    enum ValidationResult {
-        case success
-        case failure(String)
-    }
-
-    var body: some View {
-        Form {
-            Section("App Store Connect API Credentials") {
-                TextField("Key ID", text: $apiKeyId)
-                    #if os(macOS)
-                    .textFieldStyle(.roundedBorder)
-                    #endif
-
-                TextField("Issuer ID", text: $issuerId)
-                    #if os(macOS)
-                    .textFieldStyle(.roundedBorder)
-                    #endif
-
-                HStack {
-                    Text("API Key (.p8)")
-                    Spacer()
-                    if hasKey {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                        Text("Configured")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text(apiKeyFile)
-                            .foregroundStyle(.secondary)
-                    }
-                    Button("Choose...") {
-                        showingFilePicker = true
-                    }
-                }
-            }
-
-            Section {
-                HStack {
-                    Button("Validate Credentials") {
-                        Task { await validateCredentials() }
-                    }
-                    .disabled(apiKeyId.isEmpty || issuerId.isEmpty || !hasKey || isValidating)
-
-                    if isValidating {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                    }
-
-                    Spacer()
-
-                    if let result = validationResult {
-                        switch result {
-                        case .success:
-                            Label("Valid", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                        case .failure(let message):
-                            Label(message, systemImage: "xmark.circle.fill")
-                                .foregroundStyle(.red)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-
-                if hasKey {
-                    Button("Remove API Key", role: .destructive) {
-                        removeAPIKey()
-                    }
-                }
-            }
-
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("How to get API credentials:")
-                        .font(.headline)
-
-                    Text("1. Go to App Store Connect → Users and Access → Integrations")
-                    Text("2. Click the + button to create a new key")
-                    Text("3. Give it a name and select 'Admin' access")
-                    Text("4. Download the .p8 file (only available once!)")
-                    Text("5. Copy the Key ID and Issuer ID shown on the page")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-        #if os(macOS)
-        .padding()
-        #endif
-        .onAppear {
-            loadCredentials()
-        }
-        .onChange(of: apiKeyId) { _, _ in
-            saveCredentials()
-        }
-        .onChange(of: issuerId) { _, _ in
-            saveCredentials()
-        }
-        .fileImporter(
-            isPresented: $showingFilePicker,
-            allowedContentTypes: [UTType(filenameExtension: "p8") ?? .data],
-            allowsMultipleSelection: false
-        ) { result in
-            handleFileImport(result)
-        }
-    }
-
-    private func loadCredentials() {
-        hasKey = !apiKeyId.isEmpty && KeychainService.shared.hasAPIKey(keyId: apiKeyId)
-
-        if let storedIssuerId = try? KeychainService.shared.getIssuerId() {
-            issuerId = storedIssuerId
-        }
-
-        if hasKey {
-            apiKeyFile = "AuthKey_\(apiKeyId).p8"
-        }
-    }
-
-    private func saveCredentials() {
-        if !issuerId.isEmpty {
-            try? KeychainService.shared.saveIssuerId(issuerId)
-        }
-        AppStoreConnectAPI.shared.checkConfiguration()
-    }
-
-    private func handleFileImport(_ result: Result<[URL], Error>) {
-        switch result {
-        case .success(let urls):
-            guard let url = urls.first else { return }
-
-            // Start accessing security-scoped resource
-            guard url.startAccessingSecurityScopedResource() else {
-                validationResult = .failure("Cannot access file")
-                return
-            }
-            defer { url.stopAccessingSecurityScopedResource() }
-
-            do {
-                let keyData = try Data(contentsOf: url)
-
-                if apiKeyId.isEmpty {
-                    // Try to extract key ID from filename (AuthKey_XXXXXXXXXX.p8)
-                    let filename = url.deletingPathExtension().lastPathComponent
-                    if filename.hasPrefix("AuthKey_") {
-                        apiKeyId = String(filename.dropFirst(8))
-                    }
-                }
-
-                guard !apiKeyId.isEmpty else {
-                    validationResult = .failure("Please enter Key ID first")
-                    return
-                }
-
-                try KeychainService.shared.saveAPIKey(keyData, keyId: apiKeyId)
-                apiKeyFile = url.lastPathComponent
-                hasKey = true
-                validationResult = nil
-                AppStoreConnectAPI.shared.checkConfiguration()
-            } catch {
-                validationResult = .failure("Failed to save key: \(error.localizedDescription)")
-            }
-
-        case .failure(let error):
-            validationResult = .failure(error.localizedDescription)
-        }
-    }
-
-    private func removeAPIKey() {
-        guard !apiKeyId.isEmpty else { return }
-        try? KeychainService.shared.deleteAPIKey(keyId: apiKeyId)
-        hasKey = false
-        apiKeyFile = "No file selected"
-        validationResult = nil
-        AppStoreConnectAPI.shared.checkConfiguration()
-    }
-
-    private func validateCredentials() async {
-        isValidating = true
-        validationResult = nil
-
-        do {
-            _ = try await AppStoreConnectAPI.shared.validateCredentials()
-            validationResult = .success
-        } catch {
-            validationResult = .failure(error.localizedDescription)
-        }
-
-        isValidating = false
     }
 }

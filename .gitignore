@@ -22,4 +22,3 @@ DerivedData/
 # Swift Package Manager
 .build/
 .swiftpm/
-backend/wrangler.toml.prod

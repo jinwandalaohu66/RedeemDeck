@@ -15,9 +15,11 @@ final class AppRecord {
     var appStoreId: String = ""
     var bundleId: String?
 
-    // App Store Metadata
     var iconURL: String?
     var appStoreURL: String?
+
+    // Retained for existing stores and backups. The current UI only needs the
+    // identity, artwork, App Store URL, notes, and poster greeting above.
     var developerName: String?
     var appDescription: String?
     var version: String?
@@ -26,24 +28,30 @@ final class AppRecord {
     var price: String?
     var currency: String?
 
-    // TestFlight Info (user-editable)
     var testFlightURL: String?
     var testFlightNotes: String?
 
-    // Custom user notes
     var notes: String?
-
-    // Metadata last updated
+    var qrGreeting: String?
     var metadataLastUpdated: Date?
 
-    // Relationships must be optional for CloudKit
+    // Optional relationships preserve compatibility with the existing store schema.
     @Relationship(deleteRule: .cascade, inverse: \CodeBatch.app)
     var batches: [CodeBatch]?
 
     @Relationship(deleteRule: .cascade, inverse: \OfferCode.app)
     var codes: [OfferCode]?
 
+    @Relationship(deleteRule: .cascade, inverse: \CodeCategory.app)
+    var categories: [CodeCategory]?
+
+    // Persisted compatibility relationship for stores created before the
+    // focused code-library rebuild. No production workflow reads it.
+    @Relationship(deleteRule: .cascade, inverse: \Campaign.app)
+    var campaigns: [Campaign]?
+
     var createdAt: Date = Date()
+    var archivedAt: Date?
 
     init(name: String, appStoreId: String, bundleId: String? = nil) {
         self.id = UUID()
@@ -53,40 +61,10 @@ final class AppRecord {
         self.createdAt = Date()
     }
 
-    // MARK: - Computed Properties
-
-    /// Safe accessor for batches
-    private var safeBatches: [CodeBatch] {
-        batches ?? []
+    var isArchived: Bool {
+        archivedAt != nil
     }
 
-    /// Safe accessor for codes
-    private var safeCodes: [OfferCode] {
-        codes ?? []
-    }
-
-    var totalCodesCount: Int {
-        safeCodes.count
-    }
-
-    var redeemedCodesCount: Int {
-        safeCodes.filter { $0.isRedeemed }.count
-    }
-
-    var availableCodesCount: Int {
-        safeCodes.filter(\.isAvailable).count
-    }
-
-    var expiredCodesCount: Int {
-        safeCodes.filter { $0.isExpired && !$0.isRedeemed }.count
-    }
-
-    /// Computed App Store URL if not set manually
-    var effectiveAppStoreURL: String {
-        appStoreURL ?? "https://apps.apple.com/app/id\(appStoreId)"
-    }
-
-    /// Check if metadata has been fetched
     var hasMetadata: Bool {
         metadataLastUpdated != nil
     }
