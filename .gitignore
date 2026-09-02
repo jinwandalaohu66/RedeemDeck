@@ -17,7 +17,17 @@ DerivedData/
 *.p8
 *.p12
 *.pem
+*.key
 *.mobileprovision
+.env
+.env.*
+!.env.example
+.dev.vars
+
+# Sensitive code exports and backups
+*.csv
+*.redeemdeckbackup
+*.codevaultbackup
 
 # Swift Package Manager
 .build/

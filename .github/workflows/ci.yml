@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-26
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: xcodebuild -version
+
+      - name: Build for iOS Simulator
+        run: |
+          xcodebuild \
+            -project RedeemDeck.xcodeproj \
+            -scheme RedeemDeck \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Run core tests on macOS
+        run: |
+          xcodebuild \
+            -project RedeemDeck.xcodeproj \
+            -scheme RedeemDeck \
+            -destination 'platform=macOS' \
+            -only-testing:RedeemDeckTests \
+            CODE_SIGNING_ALLOWED=NO \
+            test

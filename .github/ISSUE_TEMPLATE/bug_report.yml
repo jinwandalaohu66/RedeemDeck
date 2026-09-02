@@ -1,0 +1,42 @@
+name: Bug report
+description: Report a reproducible problem in RedeemDeck.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: Do not include working offer codes, exported backups, credentials, or provisioning files.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: RedeemDeck version or commit
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Device and OS version
+      placeholder: iPhone 17 Pro, iOS 26.4
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Additional context
+      description: Add sanitized logs, screenshots, or other details if useful.
