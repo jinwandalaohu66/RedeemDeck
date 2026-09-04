@@ -2,7 +2,7 @@
 
 ## Product
 
-- Bundle ID: `app.pythonide.redeemdeck`
+- Bundle ID: `app.safevault`
 - Version: `1.0.0`
 - Price: Free
 - In-App Purchases: None

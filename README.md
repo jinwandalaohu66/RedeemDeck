@@ -62,7 +62,7 @@ In Xcode:
 
 1. Select the `RedeemDeck` target.
 2. Choose your team under **Signing & Capabilities**.
-3. Replace the bundle identifier if `app.pythonide.redeemdeck` is not available to your team.
+3. Replace the bundle identifier if `app.safevault` is not available to your team.
 4. Select a simulator, iPhone, iPad, or **My Mac**, then run the App.
 
 Changing the bundle identifier creates a separate installation and separate local database. Export a backup before deleting an existing build.

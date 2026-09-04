@@ -62,7 +62,7 @@ open RedeemDeck.xcodeproj
 
 1. 选择 `RedeemDeck` Target。
 2. 在 **Signing & Capabilities** 中选择自己的 Team。
-3. 如果你的 Team 无法使用 `app.pythonide.redeemdeck`，请换成自己拥有的 Bundle Identifier。
+3. 如果你的 Team 无法使用 `app.safevault`，请换成自己拥有的 Bundle Identifier。
 4. 选择模拟器、iPhone、iPad 或 **My Mac**，然后运行 App。
 
 修改 Bundle Identifier 会生成一个独立安装和独立本地数据库。删除现有版本前，请先导出备份。
