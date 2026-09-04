@@ -1,0 +1,94 @@
+{
+  "color-space-for-untagged-svg-colors": "display-p3",
+  "fill": {
+    "linear-gradient": [
+      "extended-srgb:0.035,0.075,0.220,1.0",
+      "extended-srgb:0.105,0.310,0.760,1.0"
+    ]
+  },
+  "groups": [
+    {
+      "blur": 0.0,
+      "layers": [
+        {
+          "glass": false,
+          "image-name-specializations": [
+            {
+              "value": "app-store-mark.svg"
+            },
+            {
+              "appearance": "dark",
+              "value": "app-store-mark-dark.svg"
+            },
+            {
+              "appearance": "tinted",
+              "value": "app-store-mark-mono.svg"
+            }
+          ],
+          "name": "A Mark"
+        }
+      ],
+      "lighting": "combined",
+      "shadow": {
+        "kind": "none",
+        "opacity": 0.0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0.0
+      }
+    },
+    {
+      "blur": 0.12,
+      "layers": [
+        {
+          "glass": true,
+          "image-name": "front-ticket.svg",
+          "name": "Front Ticket",
+          "opacity": 0.96
+        }
+      ],
+      "lighting": "combined",
+      "shadow": {
+        "kind": "layer-color",
+        "opacity": 0.34
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": true,
+        "value": 0.18
+      }
+    },
+    {
+      "blur": 0.22,
+      "layers": [
+        {
+          "glass": true,
+          "image-name": "rear-left.svg",
+          "name": "Rear Ticket Left",
+          "opacity": 0.72
+        },
+        {
+          "glass": true,
+          "image-name": "rear-right.svg",
+          "name": "Rear Ticket Right",
+          "opacity": 0.78
+        }
+      ],
+      "lighting": "individual",
+      "shadow": {
+        "kind": "layer-color",
+        "opacity": 0.32
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": true,
+        "value": 0.44
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

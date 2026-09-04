@@ -1,0 +1,13 @@
+RedeemDeck is a local-only utility for developers to import and manage App Store offer codes and promotional codes exported from App Store Connect.
+
+The app does not require an account and contains no advertising, analytics, tracking, subscriptions, or in-app purchases.
+
+To test the full import flow, tap the Add button and import the attached sample-offer-codes.csv file. It contains fictitious, non-redeemable codes for the public PythonIDE App Store record. App metadata and artwork are resolved using Apple's public lookup service.
+
+“Sent” is a local workflow state and does not represent confirmation that a code has been redeemed.
+
+Photo Library add access is requested only when the reviewer chooses to save a QR poster. Notification permission is requested only when the reviewer enables expiration reminders.
+
+Source code: https://github.com/jinwandalaohu66/RedeemDeck
+Privacy policy: https://github.com/jinwandalaohu66/RedeemDeck/blob/main/PRIVACY.md
+Support: https://github.com/jinwandalaohu66/RedeemDeck/issues

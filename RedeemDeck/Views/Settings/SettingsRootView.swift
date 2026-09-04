@@ -25,6 +25,14 @@ struct SettingsRootView: View {
                 }
                 LabeledContent("Storage", value: String(localized: "On This Device"))
             }
+
+            Section("About") {
+                Link("Open Source Project", destination: RedeemDeckLinks.sourceCode)
+                Link("Open Source Licenses", destination: RedeemDeckLinks.license)
+                Link("Privacy Policy", destination: RedeemDeckLinks.privacyPolicy)
+                Link("Support", destination: RedeemDeckLinks.support)
+                LabeledContent("Version", value: RedeemDeckLinks.versionDescription)
+            }
         }
         .navigationTitle("Settings")
         .alert(

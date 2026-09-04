@@ -101,6 +101,9 @@ final class RedeemDeckUITests: XCTestCase {
         let localStorageValue = app.staticTexts["Storage, On This Device"]
         if !localStorageValue.exists { app.swipeUp() }
         XCTAssertTrue(localStorageValue.waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Open Source Project"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Privacy Policy"].exists)
+        XCTAssertTrue(app.buttons["Support"].exists)
         XCTAssertFalse(
             app.staticTexts[
                 "RedeemDeck does not require an account or CloudKit. Export a backup before deleting the app or changing devices."

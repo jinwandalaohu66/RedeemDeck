@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <mask id="ticket-cutout">
+      <rect width="1024" height="1024" fill="black"/>
+      <rect x="178" y="270" width="668" height="464" rx="102" fill="white"/>
+      <circle cx="178" cy="502" r="62" fill="black"/>
+      <circle cx="846" cy="502" r="62" fill="black"/>
+    </mask>
+  </defs>
+  <g transform="rotate(7 512 512)" mask="url(#ticket-cutout)">
+    <rect x="144" y="236" width="736" height="532" fill="#7D83FF"/>
+  </g>
+</svg>

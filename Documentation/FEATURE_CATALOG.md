@@ -18,6 +18,8 @@ This catalog defines the single production entry and canonical state owner for e
 | Expiration reminders | Settings → Reminders | `ExpirationNotificationService` actor | request and reconciliation tests |
 | Backup and restore | Settings → Backup and Restore | `BackupRepository` + `BackupCodec` actors | legacy migration and schema-4 round-trip tests |
 | Archive | App/category/batch action → Settings → Archived Items | archive timestamps + `RedeemDeckRepository` | native Alert, archive, and restore tests |
+| Product information | Settings → About | `RedeemDeckLinks` | source, license, privacy, support, and version links |
+| App Store screenshots | Debug UI-test launch argument only | `AppStoreScreenshotFixture` | deterministic English and Simplified Chinese screenshot UI tests |
 | Transient feedback | Successful copy/save/import/archive/status action | root-owned `AppFeedbackCenter` | UI assertions and simulator review |
 
 ## Navigation contract

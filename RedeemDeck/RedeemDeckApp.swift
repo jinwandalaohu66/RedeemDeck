@@ -28,12 +28,16 @@ private func makeSharedModelContainer() -> ModelContainer {
         let container = try ModelContainer(for: schema, configurations: [configuration])
         #if DEBUG
         if isRunningUITests {
-            try seedUITestData(
-                in: container,
-                includesPosterDeck: ProcessInfo.processInfo.arguments.contains(
-                    "--ui-testing-poster-deck"
+            if ProcessInfo.processInfo.arguments.contains(AppStoreScreenshotFixture.modeArgument) {
+                try AppStoreScreenshotFixture.seed(in: container)
+            } else {
+                try seedUITestData(
+                    in: container,
+                    includesPosterDeck: ProcessInfo.processInfo.arguments.contains(
+                        "--ui-testing-poster-deck"
+                    )
                 )
-            )
+            }
         }
         #endif
         return container

@@ -1,0 +1,1 @@
+RedeemDeck 首个 App Store 版本：一款面向 Apple 开发者的免费开源兑换码管理器。

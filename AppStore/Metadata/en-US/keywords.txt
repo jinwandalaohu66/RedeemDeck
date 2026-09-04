@@ -1,0 +1,1 @@
+promo,developer,redemption,distribution,inventory,QR codes,CSV,coupons,batches,local

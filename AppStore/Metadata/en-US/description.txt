@@ -1,0 +1,29 @@
+RedeemDeck is a free, open-source, local-first offer-code manager for Apple platform developers.
+
+Import offer-code and promotional-code CSV exports from App Store Connect, organize codes by app and offer, and retrieve exactly the quantity you need—without maintaining another spreadsheet.
+
+BUILT FOR THE DISTRIBUTION WORKFLOW
+
+• Organize multiple apps, subscriptions, discounts, campaigns, and other offers
+• Keep Available, Pending, Sent, and Expired codes clearly separated
+• Select the earliest-expiring inventory automatically
+• Copy complete codes or ready-to-redeem links with one tap
+• Share a prepared selection with the system share sheet
+• Create polished QR posters with app artwork, expiration details, and a personal greeting
+• Search, filter, edit, archive, and restore codes from a dedicated management view
+• Schedule optional local expiration reminders
+• Export and restore complete backups when you choose
+• Use the app in English or Simplified Chinese on iPhone and iPad
+
+PRIVATE BY DESIGN
+
+No account. No advertising. No analytics or tracking. No developer-operated backend. Your library stays in the app's local sandbox. Network access is limited to public App Store metadata and artwork lookup, plus links that you explicitly open.
+
+“Sent” is a local workflow state. It does not claim that Apple has confirmed a code as redeemed.
+
+OPEN SOURCE
+
+RedeemDeck is available under the MIT License:
+https://github.com/jinwandalaohu66/RedeemDeck
+
+RedeemDeck is an independent project and is not affiliated with or endorsed by Apple.
